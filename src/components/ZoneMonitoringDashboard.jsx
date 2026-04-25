@@ -5,9 +5,11 @@ import { Activity, Users, AlertTriangle, ShieldCheck, MapPin } from 'lucide-reac
 import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
 export default function ZoneMonitoringDashboard() {
-  const { zones, updateZoneField, addZone } = useCrisisContext();
+  const { zones, rawZones, updateZoneField, addZone } = useCrisisContext();
   const [addingZone, setAddingZone] = useState(false);
   const [newZone, setNewZone] = useState({ name: '', severity: 5, peopleAffected: 0, distance: 1.0, resourcesPresent: 0, type: 'unknown' });
+  const [activeMapZoneId, setActiveMapZoneId] = useState(null);
+  const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 
   const handleUpdate = (id, field, value) => {
     const parsed = field === 'distance' ? parseFloat(value) : parseInt(value, 10);
@@ -17,7 +19,7 @@ export default function ZoneMonitoringDashboard() {
 
   const handleAddZone = () => {
     if (!newZone.name.trim()) return;
-    const nextId = Math.max(0, ...zones.map(z => z.id)) + 1;
+    const nextId = Math.max(0, ...rawZones.map(z => z.id)) + 1;
     addZone({ ...newZone, id: nextId, nodeId: nextId });
     setNewZone({ name: '', severity: 5, peopleAffected: 0, distance: 1.0, resourcesPresent: 0, type: 'unknown' });
     setAddingZone(false);
@@ -163,7 +165,8 @@ export default function ZoneMonitoringDashboard() {
                 const isLast = idx === zones.length - 1 && !addingZone;
                 
                 return (
-                  <tr key={zone.id} className={`hover:bg-[#2a343a]/30 transition-colors ${!isLast ? 'border-b border-[#2a343a]' : 'border-none'}`}>
+                  <React.Fragment key={zone.id}>
+                    <tr className={`hover:bg-[#2a343a]/30 transition-colors ${!isLast && activeMapZoneId !== zone.id ? 'border-b border-[#2a343a]' : 'border-none'}`}>
                     <td className="px-6 py-4 text-gray-400 border-none">
                       <div className="w-10 h-10 bg-[#182024] rounded border border-[#2a343a] flex items-center justify-center">
                         <Icon size={18} />
@@ -190,7 +193,13 @@ export default function ZoneMonitoringDashboard() {
 
                     <td className="px-4 py-4 font-medium border-none">
                       <div className="flex items-center gap-1.5 text-gray-400">
-                        <MapPin size={14} className="text-[#00d68f]" />
+                        <button 
+                          onClick={() => setActiveMapZoneId(activeMapZoneId === zone.id ? null : zone.id)}
+                          className="hover:bg-[#2a343a] p-1 rounded transition-colors"
+                          title="View on Map"
+                        >
+                          <MapPin size={14} className="text-[#00d68f]" />
+                        </button>
                         <input type="number" step="0.1" min="0" value={zone.distance}
                           onChange={e => handleUpdate(zone.id, 'distance', e.target.value)}
                           className="w-14 bg-transparent border border-transparent hover:border-gray-600 focus:border-[#00d68f] rounded px-1 py-1 text-gray-300 outline-none transition-colors"
@@ -217,6 +226,25 @@ export default function ZoneMonitoringDashboard() {
                       </div>
                     </td>
                   </tr>
+                  
+                  {activeMapZoneId === zone.id && (
+                    <tr className={`bg-[#182024]/50 ${!isLast ? 'border-b border-[#2a343a]' : 'border-none'}`}>
+                      <td colSpan="7" className="px-6 py-4 border-none">
+                        <div className="w-full h-[300px] rounded-lg overflow-hidden border border-[#2a343a]">
+                          <iframe
+                            width="100%"
+                            height="100%"
+                            style={{ border: 0 }}
+                            loading="lazy"
+                            allowFullScreen
+                            referrerPolicy="no-referrer-when-downgrade"
+                            src={`https://maps.google.com/maps?q=${encodeURIComponent(zone.name)}&t=&z=13&ie=UTF8&iwloc=&output=embed`}
+                          ></iframe>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </React.Fragment>
                 );
               })}
 

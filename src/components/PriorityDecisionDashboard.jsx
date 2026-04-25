@@ -5,7 +5,7 @@ import { Activity, Server, Crosshair } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 export default function PriorityDecisionDashboard() {
-  const { zones, isAllocated, runAllocation } = useCrisisContext();
+  const { zones, isAllocated, runAllocation, resetAllocation } = useCrisisContext();
   
   const sortedZones = useMemo(() => sortZonesByPriority(zones), [zones]);
 
@@ -31,6 +31,13 @@ export default function PriorityDecisionDashboard() {
             className="px-6 py-2 font-semibold bg-[#00d68f] text-[#182024] rounded-md hover:bg-[#00b579] transition-colors"
           >
             Execute Engine
+          </button>
+          <button 
+            onClick={resetAllocation}
+            disabled={!isAllocated}
+            className="px-6 py-2 font-semibold bg-gray-600 text-white rounded-md hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Reset
           </button>
         </div>
       </div>

@@ -1,6 +1,6 @@
 export default function StatsSummary({ zones, allocation, availableResources, remainingResources }) {
   const totalPeopleAffected = zones.reduce((sum, z) => sum + z.peopleAffected, 0)
-  const avgSeverity = (zones.reduce((sum, z) => sum + z.severity, 0) / zones.length).toFixed(1)
+  const avgSeverity = zones.length > 0 ? (zones.reduce((sum, z) => sum + z.severity, 0) / zones.length).toFixed(1) : 0
   
   return (
     <div style={{
