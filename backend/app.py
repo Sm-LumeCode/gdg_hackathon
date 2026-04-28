@@ -24,6 +24,7 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 ZONES_FILE = os.path.join(DATA_DIR, "zones.json")
 GRAPH_FILE = os.path.join(DATA_DIR, "bangalore_graph.graphml")
 RESOURCES_FILE = os.path.join(DATA_DIR, "resources.json")
+USERS_FILE = os.path.join(DATA_DIR, "users.json")
 
 
 def load_env_file():
@@ -232,6 +233,19 @@ def next_zone_id(zones):
             numbers.append(int(match.group(1)))
     return f"Z{(max(numbers) + 1) if numbers else 1:03d}"
 
+def load_users_local():
+    ensure_data_dir()
+    if os.path.exists(USERS_FILE):
+        with open(USERS_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+
+def save_users_local(users):
+    ensure_data_dir()
+    with open(USERS_FILE, "w", encoding="utf-8") as f:
+        json.dump(users, f, indent=2)
+
 
 @app.route("/")
 def index():
@@ -251,7 +265,23 @@ def auth_signup():
         return jsonify({"success": False, "message": "Missing fields"}), 400
 
     if db is None:
-        return jsonify({"success": False, "message": "Firebase is not configured on the backend"}), 500
+        # Local fallback
+        users = load_users_local()
+        if email in users:
+            return jsonify({"success": False, "message": "Email already exists"}), 400
+        
+        user_id = str(int(math.fmod(hash(email), 1000000)))
+        user_data = {
+            "id": user_id,
+            "email": email,
+            "password": password,  # Storing plain text for local hackathon demo
+            "name": name,
+            "role": role,
+            "incidents": []
+        }
+        users[email] = user_data
+        save_users_local(users)
+        return jsonify({"success": True, "user": user_data}), 201
 
     try:
         # Create user in Firebase Auth
@@ -283,6 +313,14 @@ def auth_login():
 
     if not all([email, password]):
         return jsonify({"success": False, "message": "Missing email or password"}), 400
+
+    if db is None:
+        # Local fallback
+        users = load_users_local()
+        user_data = users.get(email)
+        if user_data and user_data.get("password") == password:
+            return jsonify({"success": True, "user": user_data, "token": "local-token"}), 200
+        return jsonify({"success": False, "message": "Invalid email or password"}), 401
 
     if not FIREBASE_API_KEY:
         return jsonify({"success": False, "message": "FIREBASE_API_KEY is not configured"}), 500
@@ -316,7 +354,17 @@ def auth_login():
 @app.route("/api/incidents", methods=["GET", "OPTIONS"])
 def get_incidents():
     if request.method == "OPTIONS": return "", 204
-    if db is None: return jsonify([]), 200
+    if db is None:
+        users = load_users_local()
+        all_incidents = []
+        for uemail, udata in users.items():
+            for inc in udata.get("incidents", []):
+                inc["userId"] = udata.get("id")
+                inc["userName"] = udata.get("name")
+                all_incidents.append(inc)
+        all_incidents.sort(key=lambda x: x.get("date", ""), reverse=True)
+        return jsonify(all_incidents), 200
+
     try:
         users = db.collection("users").stream()
         all_incidents = []
@@ -335,13 +383,30 @@ def get_incidents():
 @app.route("/api/incidents", methods=["POST", "OPTIONS"])
 def create_incident():
     if request.method == "OPTIONS": return "", 204
-    if db is None: return jsonify({"error": "No DB"}), 500
+    
     data = request.get_json() or {}
     user_id = data.get("userId")
     incident = data.get("incident")
     if not user_id or not incident:
         return jsonify({"error": "Missing data"}), 400
-    
+
+    if db is None:
+        users = load_users_local()
+        user_to_update = None
+        for uemail, udata in users.items():
+            if udata.get("id") == user_id:
+                user_to_update = udata
+                break
+        
+        if not user_to_update:
+            return jsonify({"error": "User not found"}), 404
+        
+        incidents = user_to_update.get("incidents", [])
+        incidents.append(incident)
+        user_to_update["incidents"] = incidents
+        save_users_local(users)
+        return jsonify({"success": True, "user": user_to_update}), 201
+
     try:
         user_ref = db.collection("users").document(user_id)
         user_doc = user_ref.get()
@@ -362,13 +427,34 @@ def create_incident():
 @app.route("/api/incidents/<incident_id>", methods=["PUT", "OPTIONS"])
 def update_incident(incident_id):
     if request.method == "OPTIONS": return "", 204
-    if db is None: return jsonify({"error": "No DB"}), 500
+
     data = request.get_json() or {}
     user_id = data.get("userId")
     updates = data.get("updates", {})
     if not user_id:
         return jsonify({"error": "Missing userId"}), 400
+
+    if db is None:
+        users = load_users_local()
+        user_to_update = None
+        for uemail, udata in users.items():
+            if udata.get("id") == user_id:
+                user_to_update = udata
+                break
         
+        if not user_to_update:
+            return jsonify({"error": "User not found"}), 404
+            
+        incidents = user_to_update.get("incidents", [])
+        for idx, inc in enumerate(incidents):
+            if inc.get("id") == incident_id:
+                incidents[idx].update(updates)
+                break
+                
+        user_to_update["incidents"] = incidents
+        save_users_local(users)
+        return jsonify({"success": True, "user": user_to_update}), 200
+
     try:
         user_ref = db.collection("users").document(user_id)
         user_doc = user_ref.get()
@@ -548,4 +634,6 @@ def google_place_details():
 if __name__ == "__main__":
     ensure_data_dir()
     load_resources()
-    app.run(debug=True, port=5000, use_reloader=False)
+    port = int(os.environ.get("PORT", 5000))
+    debug = os.environ.get("FLASK_ENV") != "production"
+    app.run(host="0.0.0.0", port=port, debug=debug, use_reloader=False)

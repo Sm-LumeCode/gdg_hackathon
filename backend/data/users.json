@@ -1,0 +1,18 @@
+{
+  "surabhim1101@gmail.com": {
+    "id": "617216",
+    "email": "surabhim1101@gmail.com",
+    "password": "1234567890",
+    "name": "Surabhi M",
+    "role": "user",
+    "incidents": []
+  },
+  "surabhim.cs24@rvce.edu.in": {
+    "id": "568192",
+    "email": "surabhim.cs24@rvce.edu.in",
+    "password": "0987654321",
+    "name": "ADMIN",
+    "role": "admin",
+    "incidents": []
+  }
+}

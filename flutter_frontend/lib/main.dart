@@ -1,22 +1,76 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
+import 'dart:ui';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart' as ll;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
-const bg = Color(0xFF182024);
-const panel = Color(0xFF1C252A);
-const card = Color(0xFF212B31);
-const border = Color(0xFF2A343A);
-const green = Color(0xFF00D68F);
-const cyan = Color(0xFF00D4FF);
-const orange = Color(0xFFFF5722);
-const yellow = Color(0xFFFBBF24);
-const blue = Color(0xFF3B82F6);
-const violet = Color(0xFFA78BFA);
+const Color bg = Color(0xFF0A0E1A);
+const Color cardBg = Color(0xFF0F172A);
+const Color emerald = Color(0xFF10B981);
+const Color emeraldBorder = Color(0x3310B981);
+const Color neonOrange = Color(0xFFF97316);
+const Color slateText = Color(0xFFE0E6ED);
+const Color blue = Color(0xFF3B82F6);
+const Color cyan = Color(0xFF06B6D4);
+const Color violet = Color(0xFF8B5CF6);
+const Color orange = Color(0xFFF59E0B);
+const Color green = emerald;
+const Color yellow = Color(0xFFFFD60A);
+const Color border = Color(0xFF1E293B);
+
+class AppTheme {
+  final Color bg;
+  final Color bg2;
+  final Color card;
+  final Color border;
+  final Color text;
+  final Color primary;
+  final Color secondary;
+  final Color shadow;
+  final Color grid;
+
+  const AppTheme({
+    required this.bg,
+    required this.bg2,
+    required this.card,
+    required this.border,
+    required this.text,
+    required this.primary,
+    required this.secondary,
+    required this.shadow,
+    required this.grid,
+  });
+
+  static const dark = AppTheme(
+    bg: Color(0xFF0A0E1A),
+    bg2: Color(0xFF0F172A),
+    card: Color(0x990F172A),
+    border: Color(0x3310B981),
+    text: Color(0xFFE0E6ED),
+    primary: Color(0xFF10B981),
+    secondary: Color(0xFFF97316),
+    shadow: Color(0x1A10B981),
+    grid: Color(0x0D10B981),
+  );
+
+  static const light = AppTheme(
+    bg: Color(0xFFFAFBFB), // Base
+    bg2: Color(0xFFE2E8F0), // Secondary background
+    card: Color(0xD9FFFFFF), // rgba(255,255,255,0.85)
+    border: Color(0x4094A3B8), // rgba(148,163,184,0.25)
+    text: Color(0xFF0F172A),
+    primary: Color(0xFF0EA5E9),
+    secondary: Color(0xFFF59E0B),
+    shadow: Color(0x1A0F172A),
+    grid: Color(0x1A94A3B8),
+  );
+}
 
 const geminiApiKey = String.fromEnvironment('GEMINI_API_KEY');
 const googleMapsApiKey = String.fromEnvironment('GOOGLE_MAPS_API_KEY');
@@ -43,6 +97,7 @@ class _CommandAppState extends State<CommandApp> {
     store.load().then((_) => setState(() {}));
     timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (store.completeExpiredAssignments()) setState(() {});
+      store.checkNotifications();
     });
   }
 
@@ -54,15 +109,43 @@ class _CommandAppState extends State<CommandApp> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = store.theme;
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'COMMAND',
+      title: 'NEXUS DISPATCH',
       theme: ThemeData(
-        brightness: Brightness.dark,
-        scaffoldBackgroundColor: bg,
-        colorScheme: ColorScheme.fromSeed(seedColor: green, brightness: Brightness.dark),
-        fontFamily: 'Roboto',
         useMaterial3: true,
+        brightness: store.isDarkMode ? Brightness.dark : Brightness.light,
+        scaffoldBackgroundColor: theme.bg,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: theme.primary,
+          brightness: store.isDarkMode ? Brightness.dark : Brightness.light,
+          surface: theme.bg2,
+        ),
+        fontFamily: 'Inter',
+        textTheme: TextTheme(
+          bodyLarge: TextStyle(color: store.isDarkMode ? theme.text : const Color(0xFF334155), letterSpacing: -0.2),
+          bodyMedium: TextStyle(color: store.isDarkMode ? theme.text : const Color(0xFF64748B), letterSpacing: -0.2),
+          headlineLarge: TextStyle(color: theme.text, fontWeight: FontWeight.w900, letterSpacing: -1.2, height: 1.1),
+          headlineMedium: TextStyle(color: theme.text, fontWeight: FontWeight.bold, letterSpacing: -0.8),
+        ),
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: theme.primary,
+            foregroundColor: store.isDarkMode ? theme.bg : Colors.white,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+            textStyle: const TextStyle(fontWeight: FontWeight.bold, letterSpacing: 0.5),
+          ),
+        ),
+        outlinedButtonTheme: OutlinedButtonThemeData(
+          style: OutlinedButton.styleFrom(
+            foregroundColor: theme.primary,
+            side: BorderSide(color: theme.border),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+          ),
+        ),
       ),
       home: store.ready ? Shell(store: store, onChanged: () => setState(() {})) : const LoadingScreen(),
     );
@@ -246,14 +329,29 @@ class PlaceSuggestion {
   final double? lon;
 }
 
+class AppNotification {
+  AppNotification({required this.title, required this.message, required this.timestamp});
+  final String title;
+  final String message;
+  final DateTime timestamp;
+}
+
 class AppStore {
+  static final AppStore _instance = AppStore._internal();
+  factory AppStore() => _instance;
+  AppStore._internal();
+
   bool ready = false;
   List<UserAccount> users = [];
   UserAccount? currentUser;
+  bool isDarkMode = true;
+  List<AppNotification> notifications = [];
+  Map<String, String> _lastStatus = {};
 
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
-    final rawUsers = prefs.getString('crisis_flutter_users');
+    isDarkMode = true;
+    final rawUsers = prefs.getString('nexus_dispatch_users');
     final rawCurrent = prefs.getString('crisis_flutter_current_user');
     if (rawUsers != null) {
       users = (jsonDecode(rawUsers) as List).map((item) => UserAccount.fromJson(Map<String, dynamic>.from(item))).toList();
@@ -267,7 +365,8 @@ class AppStore {
 
   Future<void> persist() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('crisis_flutter_users', jsonEncode(users.map((user) => user.toJson()).toList()));
+    await prefs.setBool('isDarkMode', isDarkMode);
+    await prefs.setString('nexus_dispatch_users', jsonEncode(users.map((e) => e.toJson()).toList()));
     if (currentUser != null) {
       await prefs.setString('crisis_flutter_current_user', jsonEncode(currentUser!.toJson()));
     } else {
@@ -275,21 +374,100 @@ class AppStore {
     }
   }
 
-  String? login(String email, String password) {
-    final match = users.where((user) => user.email == email && user.password == password).firstOrNull;
-    if (match == null) return 'Invalid credentials';
-    currentUser = match;
-    persist();
-    return null;
+  void checkNotifications() {
+    final all = allIncidents();
+    bool changed = false;
+    for (var item in all) {
+      final id = item.incident.id;
+      final status = item.incident.status;
+      
+      if (_lastStatus.containsKey(id)) {
+        if (_lastStatus[id] != status) {
+          if (currentUser?.role == 'user' && status == 'assigned' && item.user.id == currentUser?.id) {
+            addNotification('Incident Assigned', 'Your report for ${item.incident.incidentType} has been assigned a responder.');
+            changed = true;
+          }
+        }
+      }
+      _lastStatus[id] = status;
+    }
+    
+    // Check for new reports for Admin
+    if (currentUser?.role == 'admin') {
+      final newItems = all.where((i) => !_lastStatus.containsKey(i.incident.id)).toList();
+      if (newItems.isNotEmpty) {
+        addNotification('New Report', '${newItems.length} new emergency report(s) received.');
+        changed = true;
+        for (var i in newItems) {
+          _lastStatus[i.incident.id] = i.incident.status;
+        }
+      }
+    }
   }
 
-  String? signup({required String email, required String password, required String name, required String role}) {
-    if (users.any((user) => user.email == email)) return 'Email already exists';
-    final user = UserAccount(id: DateTime.now().millisecondsSinceEpoch.toString(), email: email, password: password, name: name, role: role);
-    users.add(user);
-    currentUser = user;
+  AppTheme get theme => isDarkMode ? AppTheme.dark : AppTheme.light;
+
+  void toggleTheme() {
+    isDarkMode = !isDarkMode;
     persist();
-    return null;
+  }
+
+  void addNotification(String title, String message) {
+    notifications.insert(0, AppNotification(title: title, message: message, timestamp: DateTime.now()));
+  }
+
+  Future<String?> login(String email, String password) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$backendBaseUrl/api/auth/login'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'email': email, 'password': password}),
+      );
+      final data = jsonDecode(response.body);
+      if (data['success'] == true) {
+        final user = UserAccount.fromJson(Map<String, dynamic>.from(data['user']));
+        currentUser = user;
+        final index = users.indexWhere((u) => u.id == user.id);
+        if (index != -1) {
+          users[index] = user;
+        } else {
+          users.add(user);
+        }
+        persist();
+        return null;
+      } else {
+        return data['message'] ?? 'Login failed';
+      }
+    } catch (e) {
+      return 'Connection error: $e';
+    }
+  }
+
+  Future<String?> signup({required String email, required String password, required String name, required String role}) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$backendBaseUrl/api/auth/signup'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'email': email,
+          'password': password,
+          'name': name,
+          'role': role,
+        }),
+      );
+      final data = jsonDecode(response.body);
+      if (data['success'] == true) {
+        final user = UserAccount.fromJson(Map<String, dynamic>.from(data['user']));
+        currentUser = user;
+        users.add(user);
+        persist();
+        return null;
+      } else {
+        return data['message'] ?? 'Signup failed';
+      }
+    } catch (e) {
+      return 'Connection error: $e';
+    }
   }
 
   void logout() {
@@ -353,109 +531,220 @@ class Shell extends StatefulWidget {
 }
 
 class _ShellState extends State<Shell> {
-  int volunteerTab = 0;
   int userTab = 0;
+  int adminTab = 0;
+  bool sidebarOpen = true;
 
   @override
   Widget build(BuildContext context) {
     final user = widget.store.currentUser;
-    if (user == null) {
-      return LoginScreen(store: widget.store, onChanged: widget.onChanged);
-    }
-    final isVolunteer = user.role == 'volunteer';
+    if (user == null) return AuthScreen(store: widget.store, onChanged: widget.onChanged);
+    
+    final isVolunteer = user.role == 'admin' || user.role == 'volunteer';
     final items = isVolunteer
-        ? const [
-            NavItem(Icons.dashboard_rounded, 'Dashboard'),
-            NavItem(Icons.work_rounded, 'Allotment'),
-            NavItem(Icons.assignment_rounded, 'Record'),
-            NavItem(Icons.storage_rounded, 'History'),
+        ? [
+            (icon: Icons.grid_view_rounded, label: 'Dashboard'),
+            (icon: Icons.business_center_rounded, label: 'Allotment'),
+            (icon: Icons.assignment_rounded, label: 'Record'),
+            (icon: Icons.format_list_bulleted_rounded, label: 'History'),
           ]
-        : const [
-            NavItem(Icons.dashboard_rounded, 'Dashboard'),
-            NavItem(Icons.history_rounded, 'History'),
-            NavItem(Icons.work_rounded, 'Allocation'),
-            NavItem(Icons.map_rounded, 'Routing'),
+        : [
+            (icon: Icons.report_problem_rounded, label: 'Report Incident'),
+            (icon: Icons.map_rounded, label: 'Response Status'),
+            (icon: Icons.history_rounded, label: 'My Reports'),
           ];
-    final selected = isVolunteer ? volunteerTab : userTab;
+
+    final selected = isVolunteer ? adminTab : userTab;
 
     return Scaffold(
-      body: Row(
+      body: Stack(
         children: [
-          Container(
-            width: 250,
-            color: bg,
-            child: Column(
-              children: [
-                const SizedBox(height: 28),
-                const ListTile(
-                  leading: Icon(Icons.local_activity_rounded, color: green),
-                  title: Text('COMMAND', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, letterSpacing: 2)),
+          const CyberpunkBackground(),
+          Row(
+            children: [
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 300),
+                width: sidebarOpen ? 250 : 0,
+                clipBehavior: Clip.antiAlias,
+                decoration: BoxDecoration(
+                  color: widget.store.theme.bg2.withValues(alpha: .3),
+                  border: Border(right: BorderSide(color: widget.store.theme.border)),
                 ),
-                const SizedBox(height: 16),
-                ...List.generate(items.length, (index) {
-                  final item = items[index];
-                  final active = selected == index;
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                    child: ListTile(
-                      selected: active,
-                      selectedTileColor: border,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                      leading: Icon(item.icon, color: active ? green : Colors.grey),
-                      title: Text(item.label, style: TextStyle(color: active ? Colors.white : Colors.grey.shade400)),
-                      onTap: () => setState(() => isVolunteer ? volunteerTab = index : userTab = index),
+                child: Column(
+                  children: [
+                    const Padding(
+                      padding: EdgeInsets.fromLTRB(16, 12, 16, 24),
+                      child: Row(
+                        children: [
+                          Icon(Icons.stars_rounded, color: green, size: 24),
+                          SizedBox(width: 12),
+                          Text('COMMAND', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold, letterSpacing: 1.5)),
+                        ],
+                      ),
                     ),
-                  );
-                }),
-                const Spacer(),
-                ListTile(
-                  leading: CircleAvatar(backgroundColor: green, child: Text(user.name.isEmpty ? 'U' : user.name[0].toUpperCase(), style: const TextStyle(color: bg))),
-                  title: Text(user.name.isEmpty ? user.email : user.name, overflow: TextOverflow.ellipsis),
-                  subtitle: Text(user.role),
-                ),
-                Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: OutlinedButton.icon(
-                    onPressed: () {
-                      widget.store.logout();
-                      widget.onChanged();
-                    },
-                    icon: const Icon(Icons.logout_rounded),
-                    label: const Text('Log Out'),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Expanded(
-            child: Container(
-              color: panel,
-              child: SafeArea(
-                child: Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: isVolunteer ? volunteerPage(selected) : userPage(selected),
+                    ...List.generate(items.length, (index) {
+                      final item = items[index];
+                      final active = selected == index;
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                        child: ListTile(
+                          selected: active,
+                          selectedTileColor: emerald.withValues(alpha: .1),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: BorderSide(color: active ? emerald.withValues(alpha: .3) : Colors.transparent)),
+                          leading: Icon(item.icon, color: active ? emerald : Colors.grey),
+                          title: Text(item.label, style: TextStyle(color: active ? Colors.white : Colors.grey.shade400, fontWeight: active ? FontWeight.bold : FontWeight.normal, fontSize: 14)),
+                          onTap: () => setState(() => isVolunteer ? adminTab = index : userTab = index),
+                        ),
+                      );
+                    }),
+                    const Spacer(),
+                    const Divider(color: border, height: 1),
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        children: [
+                          Row(
+                            children: [
+                              const CircleAvatar(radius: 16, backgroundColor: green, child: Text('S', style: TextStyle(color: bg, fontWeight: FontWeight.bold, fontSize: 12))),
+                              const SizedBox(width: 10),
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(user.name.isEmpty ? 'Span' : user.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                                  Text(user.role, style: const TextStyle(color: Colors.white38, fontSize: 10)),
+                                ],
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          OutlinedButton.icon(
+                            onPressed: () {
+                              widget.store.logout();
+                              widget.onChanged();
+                            },
+                            icon: const Icon(Icons.logout_rounded, size: 14, color: Colors.white),
+                            label: const Text('Log Out', style: TextStyle(fontSize: 12, color: Colors.white)),
+                            style: OutlinedButton.styleFrom(
+                              minimumSize: const Size(double.infinity, 36),
+                              side: const BorderSide(color: border),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ),
-            ),
+              Expanded(
+                child: Column(
+                  children: [
+                    // Top Bar
+                    Container(
+                      height: 70,
+                      padding: const EdgeInsets.symmetric(horizontal: 24),
+                      decoration: BoxDecoration(
+                        border: Border(bottom: BorderSide(color: emerald.withValues(alpha: 0.1))),
+                      ),
+                      child: Row(
+                        children: [
+                          IconButton(
+                            onPressed: () => setState(() => sidebarOpen = !sidebarOpen),
+                            icon: Icon(sidebarOpen ? Icons.menu_open_rounded : Icons.menu_rounded, color: emerald),
+                          ),
+                          const Spacer(),
+                          Stack(
+                            children: [
+                              IconButton(
+                                icon: const Icon(Icons.notifications_outlined, color: Colors.white),
+                                onPressed: () {
+                                  // Show notifications
+                                },
+                              ),
+                              if (widget.store.notifications.isNotEmpty)
+                                Positioned(
+                                  right: 8,
+                                  top: 8,
+                                  child: Container(
+                                    padding: const EdgeInsets.all(4),
+                                    decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
+                                    child: Text('${widget.store.notifications.length}', style: const TextStyle(fontSize: 10, color: Colors.white)),
+                                  ),
+                                ),
+                            ],
+                          ),
+                          const SizedBox(width: 8),
+                          IconButton(
+                            icon: const Icon(Icons.account_circle_outlined, color: Colors.white),
+                            onPressed: () {},
+                          ),
+                        ],
+                      ),
+                    ),
+                    Expanded(
+                      child: SafeArea(
+                        child: Padding(
+                          padding: const EdgeInsets.all(24),
+                          child: isVolunteer ? adminPage(selected) : userPage(selected),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
         ],
       ),
     );
   }
 
-  Widget volunteerPage(int selected) => switch (selected) {
-        0 => VolunteerDashboard(store: widget.store, onChanged: widget.onChanged),
-        1 => VolunteerAllotment(store: widget.store, onChanged: widget.onChanged),
-        2 => VolunteerRecord(store: widget.store, onChanged: widget.onChanged),
-        _ => HistoryPage(title: 'Volunteer History', incidents: widget.store.allIncidents().where((item) => item.incident.status == 'completed').toList()),
-      };
+  Widget adminPage(int index) {
+    final all = widget.store.allIncidents();
+    final completed = all.where((item) => item.incident.status == 'completed').toList();
+    return switch (index) {
+      0 => AdminReportsView(store: widget.store, onChanged: widget.onChanged),
+      1 => VolunteerAllotment(store: widget.store, onChanged: widget.onChanged),
+      2 => AdminRecord(store: widget.store, onChanged: widget.onChanged),
+      _ => HistoryPage(title: 'Mission History', incidents: completed),
+    };
+  }
 
-  Widget userPage(int selected) => switch (selected) {
-        0 => UserDashboard(store: widget.store, onChanged: widget.onChanged),
-        1 => HistoryPage(title: 'Your History', incidents: widget.store.currentUser!.incidents.where((incident) => incident.status == 'completed').map((incident) => IncidentView(incident, widget.store.currentUser!)).toList()),
-        2 => UserAllocation(store: widget.store),
-        _ => UserRouting(store: widget.store, onChanged: widget.onChanged),
-      };
+  Widget userPage(int index) {
+    return switch (index) {
+      0 => UserDashboard(store: widget.store, onChanged: widget.onChanged),
+      1 => UserAllocation(store: widget.store),
+      _ => UserRouting(store: widget.store, onChanged: widget.onChanged),
+    };
+  }
+}
+
+class StepProgressIndicator extends StatelessWidget {
+  const StepProgressIndicator({super.key, required this.currentStep, required this.totalSteps});
+  final int currentStep;
+  final int totalSteps;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: List.generate(totalSteps * 2 - 1, (index) {
+        if (index.isOdd) return Expanded(child: Container(height: 2, color: index ~/ 2 < currentStep - 1 ? emerald : border));
+        final step = index ~/ 2 + 1;
+        final active = step <= currentStep;
+        return Container(
+          width: 32,
+          height: 32,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: active ? emerald : bg,
+            border: Border.all(color: active ? emerald : border, width: 2),
+            boxShadow: [if (active) BoxShadow(color: emerald.withValues(alpha: 0.3), blurRadius: 8)],
+          ),
+          child: Center(child: step < currentStep ? const Icon(Icons.check, size: 16, color: bg) : Text('$step', style: TextStyle(color: active ? bg : Colors.grey, fontWeight: FontWeight.bold))),
+        );
+      }),
+    );
+  }
 }
 
 class NavItem {
@@ -534,13 +823,23 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  void submit() {
+  void submit() async {
     setState(() => error = null);
+    
+    if (!login && role == 'volunteer' && referral.text != 'qwerty') {
+      setState(() => error = 'Invalid referral code for volunteer');
+      return;
+    }
+
     final message = login
-        ? widget.store.login(email.text.trim(), password.text)
-        : role == 'volunteer' && referral.text != 'qwerty'
-            ? 'Invalid referral code for volunteer'
-            : widget.store.signup(email: email.text.trim(), password: password.text, name: name.text.trim(), role: role);
+        ? await widget.store.login(email.text.trim(), password.text)
+        : await widget.store.signup(
+            email: email.text.trim(), 
+            password: password.text, 
+            name: name.text.trim(), 
+            role: role
+          );
+
     if (message != null) {
       setState(() => error = message);
     } else {
@@ -563,6 +862,7 @@ class _UserDashboardState extends State<UserDashboard> {
   
   // MCQ Selections
   String? selectedAccidentType;
+  String selectedSeverity = 'Low';
   String? groupOrIndividual;
   String? selectedGroupSize;
   final customGroupSize = TextEditingController();
@@ -612,52 +912,67 @@ class _UserDashboardState extends State<UserDashboard> {
   Widget build(BuildContext context) {
     return Center(
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 720),
-        child: CommandCard(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Icon(getStepIcon(), color: green, size: 44),
-              const SizedBox(height: 16),
-              Text(getStepTitle(), textAlign: TextAlign.center, style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 8),
-              Text(getStepSubtitle(), textAlign: TextAlign.center, style: TextStyle(color: Colors.grey.shade400)),
-              const SizedBox(height: 24),
-              
-              // Step Content
-              Expanded(
-                child: SingleChildScrollView(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      if (step == 1) ...buildStep1(),
-                      if (step == 2) ...buildStep2(),
-                      if (step == 3) ...buildStep3(),
-                      if (step == 4) ...buildStep4(),
-                      if (step == 5) ...buildStep5(),
-                    ],
-                  ),
+        constraints: const BoxConstraints(maxWidth: 850),
+        child: Column(
+          children: [
+            const SizedBox(height: 20),
+            StepProgressIndicator(currentStep: step, totalSteps: 5),
+            const SizedBox(height: 40),
+            Expanded(
+              child: CommandCard(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(getStepTitle(), style: const TextStyle(color: emerald, fontSize: 20, fontWeight: FontWeight.bold, letterSpacing: -0.5)),
+                    const SizedBox(height: 24),
+                    
+                    // Step Content
+                    Expanded(
+                      child: SingleChildScrollView(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            if (step == 1) ...buildStep1(),
+                            if (step == 2) ...buildStep2(),
+                            if (step == 3) ...buildStep3(),
+                            if (step == 4) ...buildStep4(),
+                            if (step == 5) ...buildStep5(),
+                          ],
+                        ),
+                      ),
+                    ),
+                    
+                    const SizedBox(height: 32),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        if (step > 1)
+                          SizedBox(
+                            width: 150,
+                            child: OutlinedButton.icon(
+                              onPressed: back,
+                              icon: const Icon(Icons.chevron_left_rounded),
+                              label: const Text('Previous'),
+                            ),
+                          )
+                        else
+                          const SizedBox(width: 150),
+                        
+                        SizedBox(
+                          width: 180,
+                          child: CyberpunkGradientButton(
+                            onPressed: step == 5 ? submit : next,
+                            label: step == 5 ? 'Confirm' : 'Next',
+                            icon: step == 5 ? Icons.check_circle_outline : Icons.chevron_right_rounded,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
               ),
-              
-              const SizedBox(height: 18),
-              Row(
-                children: [
-                  if (step > 1)
-                    Expanded(child: OutlinedButton(onPressed: back, child: const Text('Back'))),
-                  if (step > 1) const SizedBox(width: 12),
-                  Expanded(
-                    child: FilledButton(
-                      style: FilledButton.styleFrom(backgroundColor: green, foregroundColor: bg, padding: const EdgeInsets.all(16)),
-                      onPressed: step == 5 ? submit : next,
-                      child: Text(step == 5 ? 'Confirm & Report' : 'Next', style: const TextStyle(fontWeight: FontWeight.bold)),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
@@ -694,18 +1009,46 @@ class _UserDashboardState extends State<UserDashboard> {
   }
 
   List<Widget> buildStep1() {
-    return accidentTypes.map((type) => Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: RadioListTile<String>(
-        title: Text(type),
-        value: type,
-        groupValue: selectedAccidentType,
-        onChanged: (val) => setState(() => selectedAccidentType = val),
-        tileColor: bg,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10), side: BorderSide(color: selectedAccidentType == type ? green : border)),
-        activeColor: green,
+    return [
+      const Text('Severity Level', style: TextStyle(color: neonOrange, fontSize: 16, fontWeight: FontWeight.w500)),
+      const SizedBox(height: 16),
+      Row(
+        children: ['Low', 'Medium', 'Critical'].map((level) {
+          final active = selectedSeverity == level;
+          return Expanded(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: OutlinedButton(
+                style: OutlinedButton.styleFrom(
+                  backgroundColor: active ? emerald.withValues(alpha: .1) : Colors.transparent,
+                  side: BorderSide(color: active ? emerald : emerald.withValues(alpha: .1)),
+                  padding: const EdgeInsets.symmetric(vertical: 20),
+                ),
+                onPressed: () => setState(() => selectedSeverity = level),
+                child: Text(level, style: TextStyle(color: active ? Colors.white : Colors.grey)),
+              ),
+            ),
+          );
+        }).toList(),
       ),
-    )).toList();
+      const SizedBox(height: 32),
+      const Text('Incident Category', style: TextStyle(color: emerald, fontSize: 16, fontWeight: FontWeight.w500)),
+      const SizedBox(height: 16),
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        decoration: panelBox(alpha: .2),
+        child: DropdownButtonHideUnderline(
+          child: DropdownButton<String>(
+            value: selectedAccidentType,
+            hint: const Text('Select incident type'),
+            isExpanded: true,
+            dropdownColor: bg,
+            items: accidentTypes.map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
+            onChanged: (v) => setState(() => selectedAccidentType = v),
+          ),
+        ),
+      ),
+    ];
   }
 
   List<Widget> buildStep2() {
@@ -821,6 +1164,7 @@ class _UserDashboardState extends State<UserDashboard> {
     setState(() {
       step = 1;
       selectedAccidentType = null;
+      selectedSeverity = 'Low';
       groupOrIndividual = null;
       selectedGroupSize = null;
       customGroupSize.clear();
@@ -837,42 +1181,95 @@ class _UserDashboardState extends State<UserDashboard> {
   }
 }
 
-class VolunteerDashboard extends StatefulWidget {
-  const VolunteerDashboard({super.key, required this.store, required this.onChanged});
+
+
+class AdminReportsView extends StatelessWidget {
+  const AdminReportsView({super.key, required this.store, required this.onChanged});
   final AppStore store;
   final VoidCallback onChanged;
 
   @override
-  State<VolunteerDashboard> createState() => _VolunteerDashboardState();
-}
-
-class _VolunteerDashboardState extends State<VolunteerDashboard> {
-  bool running = false;
-
-  @override
   Widget build(BuildContext context) {
-    final incidents = widget.store.allIncidents();
+    final all = store.allIncidents();
+    final pending = all.where((item) => item.incident.status == 'pending').toList();
+    final assigned = all.where((item) => item.incident.status == 'assigned').toList();
+    final completed = all.where((item) => item.incident.status == 'completed').toList();
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Header(title: 'Global Dashboard', subtitle: 'View all reported incidents and assess severity.', action: FilledButton.icon(onPressed: running ? null : runEngine, icon: running ? const SizedBox.square(dimension: 18, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.play_arrow_rounded), label: Text(running ? 'Running Engine...' : 'Run Engine'))),
+        const Header(title: 'Incident Reports', subtitle: 'Real-time overview of all reported emergencies and their current status.'),
+        const SizedBox(height: 20),
+        Wrap(
+          spacing: 16,
+          runSpacing: 16,
+          children: [
+            Metric('Total Reports', all.length, Icons.analytics_rounded, blue),
+            Metric('Pending', pending.length, Icons.pending_actions_rounded, orange),
+            Metric('In Progress', assigned.length, Icons.run_circle_rounded, cyan),
+            Metric('Resolved', completed.length, Icons.check_circle_rounded, green),
+          ],
+        ),
         const SizedBox(height: 24),
         Expanded(
           child: CommandCard(
             padding: EdgeInsets.zero,
-            child: incidents.isEmpty
-                ? const EmptyState(icon: Icons.warning_rounded, text: 'No incidents reported yet.')
-                : ListView.separated(
-                    itemCount: incidents.length,
-                    separatorBuilder: (context, index) => const Divider(color: border, height: 1),
-                    itemBuilder: (context, index) {
-                      final item = incidents[index];
+            child: all.isEmpty
+                ? const EmptyState(icon: Icons.description_rounded, text: 'No incident reports found.')
+                : ListView.builder(
+                    padding: const EdgeInsets.all(16),
+                    itemCount: all.length,
+                    itemBuilder: (_, index) {
+                      final item = all[index];
                       final inc = item.incident;
-                      return ListTile(
-                        title: Text(inc.incidentType.isEmpty ? 'Unspecified' : inc.incidentType),
-                        subtitle: Text('${inc.description}\n${inc.place}', maxLines: 2, overflow: TextOverflow.ellipsis),
-                        leading: CircleAvatar(backgroundColor: statusColor(inc.status).withValues(alpha: .15), child: Icon(Icons.warning_rounded, color: statusColor(inc.status))),
-                        trailing: Chip(label: Text(inc.score?.toString() ?? '-'), backgroundColor: scoreColor(inc.score).withValues(alpha: .15)),
+                      return Container(
+                        margin: const EdgeInsets.only(bottom: 12),
+                        decoration: BoxDecoration(
+                          color: bg.withValues(alpha: .3),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: border),
+                        ),
+                        child: ListTile(
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                          leading: CircleAvatar(
+                            backgroundColor: statusColor(inc.status).withValues(alpha: .15),
+                            child: Icon(statusIcon(inc.status), color: statusColor(inc.status), size: 20),
+                          ),
+                          title: Row(
+                            children: [
+                              Text(inc.incidentType.isEmpty ? 'General Emergency' : inc.incidentType, style: const TextStyle(fontWeight: FontWeight.bold)),
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                decoration: BoxDecoration(color: statusColor(inc.status).withValues(alpha: .1), borderRadius: BorderRadius.circular(20), border: Border.all(color: statusColor(inc.status).withValues(alpha: .3))),
+                                child: Text(inc.status.toUpperCase(), style: TextStyle(color: statusColor(inc.status), fontSize: 10, fontWeight: FontWeight.bold)),
+                              ),
+                            ],
+                          ),
+                          subtitle: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const SizedBox(height: 4),
+                              Text(inc.description, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white70)),
+                              const SizedBox(height: 4),
+                              Row(
+                                children: [
+                                  const Icon(Icons.location_on_rounded, size: 12, color: Colors.white38),
+                                  const SizedBox(width: 4),
+                                  Text(inc.place, style: const TextStyle(color: Colors.white38, fontSize: 12)),
+                                  const Spacer(),
+                                  Text('Reported by: ${item.user.name.isEmpty ? item.user.email : item.user.name}', style: const TextStyle(color: Colors.white38, fontSize: 11)),
+                                ],
+                              ),
+                            ],
+                          ),
+                          trailing: inc.image != null
+                              ? ClipRRect(
+                                  borderRadius: BorderRadius.circular(8),
+                                  child: Image.memory(base64Decode(inc.image!), width: 50, height: 50, fit: BoxFit.cover),
+                                )
+                              : const SizedBox(width: 50),
+                        ),
                       );
                     },
                   ),
@@ -882,17 +1279,12 @@ class _VolunteerDashboardState extends State<VolunteerDashboard> {
     );
   }
 
-  Future<void> runEngine() async {
-    setState(() => running = true);
-    for (final item in widget.store.allIncidents()) {
-      final inc = item.incident;
-      inc.score ??= calculateScore(inc);
-    }
-    await widget.store.persist();
-    await Future<void>.delayed(const Duration(milliseconds: 500));
-    setState(() => running = false);
-    widget.onChanged();
-  }
+  IconData statusIcon(String status) => switch (status) {
+        'pending' => Icons.timer_outlined,
+        'assigned' => Icons.local_shipping_outlined,
+        'completed' => Icons.check_circle_outlined,
+        _ => Icons.error_outline,
+      };
 }
 
 class VolunteerAllotment extends StatefulWidget {
@@ -935,19 +1327,20 @@ class _VolunteerAllotmentState extends State<VolunteerAllotment> {
         Header(
           title: 'Resource Allotment',
           subtitle: 'Run once to categorize incidents and assign nearest Google-ready responder units.',
-          action: FilledButton.icon(
+          action: CyberpunkGradientButton(
             onPressed: running || pending.isEmpty ? null : () => runAllotment(pending, assigned),
-            icon: running ? const SizedBox.square(dimension: 18, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.bolt_rounded),
-            label: Text(running ? 'Running allotment...' : 'Run Allotment'),
+            icon: running ? null : Icons.bolt_rounded,
+            label: running ? 'Running allotment...' : 'Run Allotment',
+            orange: false,
           ),
         ),
         const SizedBox(height: 18),
         Wrap(spacing: 12, runSpacing: 12, children: [
-          Metric('Pending', pending.length, Icons.work_rounded, yellow),
-          Metric('Assigned', assigned.length, Icons.local_shipping_rounded, blue),
-          Metric('Completed', completed.length, Icons.check_circle_rounded, green),
-          Metric('Ambulances', resources['ambulance']!.length, Icons.emergency_rounded, cyan),
-          Metric('Fire/Rescue', resources['fire']!.length + resources['rescue']!.length, Icons.local_fire_department_rounded, orange),
+          _Metric('Pending', pending.length, Icons.business_center_rounded, orange),
+          _Metric('Assigned', assigned.length, Icons.local_shipping_rounded, blue),
+          _Metric('Completed', completed.length, Icons.check_circle_rounded, green),
+          _Metric('Ambulances', resources['ambulance']!.length, Icons.ac_unit_rounded, cyan),
+          _Metric('Fire/Rescue', resources['fire']!.length + resources['rescue']!.length, Icons.local_fire_department_rounded, orange),
         ]),
         const SizedBox(height: 18),
         Expanded(
@@ -955,13 +1348,14 @@ class _VolunteerAllotmentState extends State<VolunteerAllotment> {
             children: [
               SizedBox(
                 width: 430,
-                child: CommandCard(
-                  padding: EdgeInsets.zero,
+                child: Container(
+                  decoration: BoxDecoration(color: cardBg.withValues(alpha: .5), borderRadius: BorderRadius.circular(18), border: Border.all(color: border)),
                   child: active.isEmpty
                       ? const EmptyState(icon: Icons.work_rounded, text: 'No active incidents to allocate.')
                       : ListView.builder(
+                          padding: const EdgeInsets.all(16),
                           itemCount: active.length,
-                          itemBuilder: (_, index) => IncidentTile(item: active[index], now: now),
+                          itemBuilder: (_, index) => _AllotmentTile(item: active[index]),
                         ),
                 ),
               ),
@@ -1002,8 +1396,99 @@ class _VolunteerAllotmentState extends State<VolunteerAllotment> {
   }
 }
 
-class VolunteerRecord extends StatelessWidget {
-  const VolunteerRecord({super.key, required this.store, required this.onChanged});
+class _Metric extends StatelessWidget {
+  const _Metric(this.label, this.value, this.icon, this.color);
+  final String label;
+  final int value;
+  final IconData icon;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 160,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(color: cardBg.withValues(alpha: .7), borderRadius: BorderRadius.circular(16), border: Border.all(color: border)),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(color: color.withValues(alpha: .1), shape: BoxShape.circle),
+            child: Icon(icon, color: color, size: 20),
+          ),
+          const SizedBox(width: 12),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('$value', style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+              Text(label, style: const TextStyle(color: Colors.white38, fontSize: 11)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AllotmentTile extends StatelessWidget {
+  const _AllotmentTile({required this.item});
+  final IncidentView item;
+
+  @override
+  Widget build(BuildContext context) {
+    final inc = item.incident;
+    final cat = inc.responderCategory ?? classifyLocal(inc).$1;
+    final (_, color) = _vehicleStyle(cat);
+    
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(color: bg.withValues(alpha: .4), borderRadius: BorderRadius.circular(16), border: Border.all(color: border)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Text(
+                  inc.incidentType.isEmpty ? 'Emergency' : inc.incidentType,
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(color: yellow.withValues(alpha: .1), borderRadius: BorderRadius.circular(8), border: Border.all(color: yellow.withValues(alpha: .2))),
+                child: Text(inc.status, style: const TextStyle(color: yellow, fontSize: 11, fontWeight: FontWeight.bold)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(inc.description, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+          const SizedBox(height: 10),
+          Text('User: ${item.user.name.isEmpty ? "spa" : item.user.name}', style: const TextStyle(color: Colors.white38, fontSize: 11)),
+          Text('Location: ${inc.place}', style: const TextStyle(color: Colors.white38, fontSize: 11)),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(color: color.withValues(alpha: .1), borderRadius: BorderRadius.circular(8), border: Border.all(color: color.withValues(alpha: .2))),
+            child: Text(inc.responderType ?? classifyLocal(inc).$2, style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  (IconData, Color) _vehicleStyle(String? category) => switch (category) {
+        'fire'   => (Icons.local_fire_department_rounded, orange),
+        'rescue' => (Icons.safety_check_rounded, violet),
+        _        => (Icons.emergency_rounded, cyan),
+      };
+}
+
+class AdminRecord extends StatelessWidget {
+  const AdminRecord({super.key, required this.store, required this.onChanged});
   final AppStore store;
   final VoidCallback onChanged;
 
@@ -1012,6 +1497,7 @@ class VolunteerRecord extends StatelessWidget {
     final all = store.allIncidents();
     final pending = all.where((item) => item.incident.status == 'pending').toList();
     final assigned = all.where((item) => item.incident.status == 'assigned').toList();
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1020,7 +1506,7 @@ class VolunteerRecord extends StatelessWidget {
         Expanded(
           child: Row(
             children: [
-              Expanded(child: RecordColumn(title: 'Pending', icon: Icons.schedule_rounded, color: yellow, items: pending)),
+              Expanded(child: RecordColumn(title: 'Pending', icon: Icons.schedule_rounded, color: orange, items: pending)),
               const SizedBox(width: 18),
               Expanded(
                 child: RecordColumn(
@@ -1043,6 +1529,65 @@ class VolunteerRecord extends StatelessWidget {
     );
   }
 }
+class ResourceAllocationDashboard extends StatelessWidget {
+  const ResourceAllocationDashboard({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Header(title: 'Resource Allocation', subtitle: 'Global distribution of emergency units across the network.'),
+        const SizedBox(height: 20),
+        Expanded(
+          child: Row(
+            children: [
+              Expanded(child: ResourceList(category: 'ambulance', icon: Icons.emergency_rounded, color: cyan)),
+              const SizedBox(width: 18),
+              Expanded(child: ResourceList(category: 'fire', icon: Icons.local_fire_department_rounded, color: orange)),
+              const SizedBox(width: 18),
+              Expanded(child: ResourceList(category: 'rescue', icon: Icons.health_and_safety_rounded, color: violet)),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class ResourceList extends StatelessWidget {
+  const ResourceList({super.key, required this.category, required this.icon, required this.color});
+  final String category;
+  final IconData icon;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final list = resources[category] ?? [];
+    return CommandCard(
+      padding: EdgeInsets.zero,
+      child: Column(
+        children: [
+          ListTile(leading: Icon(icon, color: color), title: Text('${category.toUpperCase()} (${list.length})', style: const TextStyle(fontWeight: FontWeight.bold))),
+          Divider(color: Theme.of(context).dividerColor, height: 1),
+          Expanded(
+            child: ListView.builder(
+              itemCount: list.length,
+              itemBuilder: (context, index) {
+                final res = list[index];
+                return ListTile(
+                  title: Text(res.name),
+                  subtitle: Text('ID: ${res.id}'),
+                  trailing: const PulseDot(color: emerald),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 class UserAllocation extends StatelessWidget {
   const UserAllocation({super.key, required this.store});
@@ -1059,7 +1604,7 @@ class UserAllocation extends StatelessWidget {
         Expanded(
           child: Row(
             children: [
-              Expanded(child: StatusColumn(title: 'Pending', icon: Icons.schedule_rounded, color: yellow, incidents: incidents.where((item) => item.status == 'pending').toList())),
+              Expanded(child: StatusColumn(title: 'Pending', icon: Icons.schedule_rounded, color: orange, incidents: incidents.where((item) => item.status == 'pending').toList())),
               const SizedBox(width: 16),
               Expanded(child: StatusColumn(title: 'Assigned', icon: Icons.local_shipping_rounded, color: blue, incidents: incidents.where((item) => item.status == 'assigned').toList())),
               const SizedBox(width: 16),
@@ -1139,6 +1684,9 @@ class _UserRoutingState extends State<UserRouting> {
   }
 }
 
+
+
+
 class HistoryPage extends StatelessWidget {
   const HistoryPage({super.key, required this.title, required this.incidents});
   final String title;
@@ -1164,48 +1712,218 @@ class HistoryPage extends StatelessWidget {
   }
 }
 
-class GoogleMapPanel extends StatelessWidget {
+class GoogleMapPanel extends StatefulWidget {
   const GoogleMapPanel({super.key, required this.incidents});
   final List<IncidentView> incidents;
 
   @override
+  State<GoogleMapPanel> createState() => _GoogleMapPanelState();
+}
+
+class _GoogleMapPanelState extends State<GoogleMapPanel> {
+  _HoveredPin? _hovered;
+
+  static (IconData, Color) _vehicleStyle(String? category) => switch (category) {
+        'fire'   => (Icons.local_fire_department_rounded, orange),
+        'rescue' => (Icons.safety_check_rounded, violet),
+        _        => (Icons.emergency_rounded, cyan),
+      };
+
+  static ll.LatLng _mapCenter(List<IncidentView> active) {
+    if (active.isEmpty) return const ll.LatLng(12.9716, 77.5946);
+    double latSum = 0, lonSum = 0;
+    for (final v in active) {
+      final loc = incidentLocation(v.incident);
+      latSum += loc.$1;
+      lonSum += loc.$2;
+    }
+    return ll.LatLng(latSum / active.length, lonSum / active.length);
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final assigned = incidents.where((item) => item.incident.status == 'assigned' && item.incident.lat != null && item.incident.lon != null).toList();
-    final markers = assigned.take(8).map((item) {
+    final active = widget.incidents;
+
+    final markers = <Marker>[];
+    for (var i = 0; i < active.length; i++) {
+      final item = active[i];
+      final inc  = item.incident;
+      final sno  = i + 1;
+      final cat  = inc.responderCategory ?? classifyLocal(inc).$1;
+      final (_, incColor) = _vehicleStyle(cat);
+      final loc = incidentLocation(inc);
+
+      markers.add(Marker(
+        point: ll.LatLng(loc.$1, loc.$2),
+        width: 36,
+        height: 44,
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          onEnter: (_) => setState(() => _hovered = _HoveredPin(
+            sno: sno,
+            label: inc.incidentType.isEmpty ? 'Emergency' : inc.incidentType,
+            sub: 'Location • ${inc.place}',
+            color: incColor,
+            isVehicle: false,
+          )),
+          onExit:  (_) => setState(() => _hovered = null),
+          child: _IncidentPin(sno: sno, color: incColor),
+        ),
+      ));
+
+      if (inc.status == 'assigned' && inc.resourceLat != null && inc.resourceLon != null) {
+        final (icon, vColor) = _vehicleStyle(cat);
+        markers.add(Marker(
+          point: ll.LatLng(inc.resourceLat!, inc.resourceLon!),
+          width: 42,
+          height: 42,
+          child: MouseRegion(
+            cursor: SystemMouseCursors.click,
+            onEnter: (_) => setState(() => _hovered = _HoveredPin(
+              sno: sno,
+              label: inc.responderName ?? inc.responderType ?? 'Unit',
+              sub: 'Responding to incident #$sno • ${inc.distanceKm?.toStringAsFixed(1) ?? "--"} km',
+              color: vColor,
+              isVehicle: true,
+              vehicleIcon: icon,
+            )),
+            onExit: (_) => setState(() => _hovered = null),
+            child: _VehiclePin(icon: icon, color: vColor, sno: sno),
+          ),
+        ));
+      }
+    }
+
+    final polylines = <Polyline>[];
+    for (final item in active) {
       final inc = item.incident;
-      return 'markers=color:red%7Clabel:I%7C${inc.lat},${inc.lon}&markers=color:blue%7Clabel:R%7C${inc.resourceLat},${inc.resourceLon}';
-    }).join('&');
-    final url = googleMapsApiKey.isEmpty
-        ? null
-        : 'https://maps.googleapis.com/maps/api/staticmap?center=12.9716,77.5946&zoom=11&size=900x620&maptype=roadmap&$markers&key=$googleMapsApiKey';
+      if (inc.status == 'assigned' && inc.resourceLat != null && inc.resourceLon != null) {
+        final loc = incidentLocation(inc);
+        final cat = inc.responderCategory ?? classifyLocal(inc).$1;
+        final (_, lColor) = _vehicleStyle(cat);
+        polylines.add(Polyline(
+          points: [
+            ll.LatLng(inc.resourceLat!, inc.resourceLon!),
+            ll.LatLng(loc.$1, loc.$2),
+          ],
+          color: lColor.withValues(alpha: .55),
+          strokeWidth: 2.5,
+          pattern: StrokePattern.dashed(segments: const [8, 6]),
+        ));
+      }
+    }
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(18),
       child: Container(
-        decoration: BoxDecoration(color: const Color(0xFF10171B), border: Border.all(color: border), borderRadius: BorderRadius.circular(18)),
+        decoration: BoxDecoration(
+          color: const Color(0xFF10171B),
+          border: Border.all(color: border),
+          borderRadius: BorderRadius.circular(18),
+        ),
         child: Stack(
           children: [
-            Positioned.fill(
-              child: url == null
-                  ? CustomPaint(painter: GridMapPainter(incidents), child: Container())
-                  : Image.network(url, fit: BoxFit.cover, errorBuilder: (context, error, stackTrace) => CustomPaint(painter: GridMapPainter(incidents), child: Container())),
+            FlutterMap(
+              options: MapOptions(
+                initialCenter: _mapCenter(active),
+                initialZoom: active.isEmpty ? 11 : 12,
+              ),
+              children: [
+                TileLayer(
+                  urlTemplate: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+                  subdomains: const ['a', 'b', 'c', 'd'],
+                  tileBuilder: (context, tileWidget, tile) {
+                    return ColorFiltered(
+                      colorFilter: const ColorFilter.matrix([
+                        0.72, 0,    0,    0, 0,
+                        0,    0.76, 0,    0, 0,
+                        0,    0,    0.82, 0, 0,
+                        0,    0,    0,    1, 0,
+                      ]),
+                      child: tileWidget,
+                    );
+                  },
+                ),
+                PolylineLayer(polylines: polylines),
+                MarkerLayer(markers: markers),
+              ],
             ),
             Positioned(
-              left: 16,
-              top: 16,
+              left: 12, top: 12,
               child: Container(
-                padding: const EdgeInsets.all(14),
-                decoration: panelBox(alpha: .92),
-                child: const Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: panelBox(alpha: .93),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    Row(children: [Icon(Icons.my_location_rounded, color: green, size: 16), SizedBox(width: 8), Text('Google Maps Dispatch View', style: TextStyle(color: green, fontWeight: FontWeight.bold))]),
-                    SizedBox(height: 6),
-                    Text('Set GOOGLE_MAPS_API_KEY for live static map tiles.', style: TextStyle(color: Colors.white60, fontSize: 12)),
+                    Icon(Icons.my_location_rounded, color: green, size: 15),
+                    SizedBox(width: 8),
+                    Text('Live Dispatch Map', style: TextStyle(color: green, fontWeight: FontWeight.bold, fontSize: 13)),
+                    SizedBox(width: 6),
+                    Text('• OpenStreetMap', style: TextStyle(color: Colors.white38, fontSize: 11)),
                   ],
                 ),
               ),
             ),
+            Positioned(
+              right: 12, bottom: 12,
+              child: Container(
+                padding: const EdgeInsets.all(10),
+                decoration: panelBox(alpha: .93),
+                child: const Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _LegendRow(icon: Icons.location_on_rounded, color: cyan, label: 'Incident site'),
+                    _LegendRow(icon: Icons.emergency_rounded, color: cyan, label: 'Ambulance'),
+                    _LegendRow(icon: Icons.local_fire_department_rounded, color: orange, label: 'Fire Engine'),
+                    _LegendRow(icon: Icons.safety_check_rounded, color: violet, label: 'Rescue Team'),
+                  ],
+                ),
+              ),
+            ),
+            if (_hovered != null)
+              Positioned(
+                left: 12, bottom: 12,
+                child: Container(
+                  constraints: const BoxConstraints(maxWidth: 240),
+                  padding: const EdgeInsets.all(12),
+                  decoration: panelBox(alpha: .97),
+                  child: Row(
+                    children: [
+                      CircleAvatar(
+                        radius: 18,
+                        backgroundColor: _hovered!.color.withValues(alpha: .2),
+                        child: _hovered!.isVehicle
+                            ? Icon(_hovered!.vehicleIcon, color: _hovered!.color, size: 18)
+                            : Text('#${_hovered!.sno}', style: TextStyle(color: _hovered!.color, fontWeight: FontWeight.bold, fontSize: 12)),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(_hovered!.label, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                            Text(_hovered!.sub,   style: const TextStyle(color: Colors.white60, fontSize: 11)),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            if (active.isEmpty)
+              const Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.map_outlined, size: 46, color: Colors.white24),
+                    SizedBox(height: 10),
+                    Text('No active incidents on map', style: TextStyle(color: Colors.white38)),
+                  ],
+                ),
+              ),
           ],
         ),
       ),
@@ -1213,36 +1931,100 @@ class GoogleMapPanel extends StatelessWidget {
   }
 }
 
-class GridMapPainter extends CustomPainter {
-  GridMapPainter(this.incidents);
-  final List<IncidentView> incidents;
+class _HoveredPin {
+  _HoveredPin({required this.sno, required this.label, required this.sub, required this.color, required this.isVehicle, this.vehicleIcon});
+  final int sno;
+  final String label;
+  final String sub;
+  final Color color;
+  final bool isVehicle;
+  final IconData? vehicleIcon;
+}
 
+class _IncidentPin extends StatelessWidget {
+  const _IncidentPin({required this.sno, required this.color});
+  final int sno;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 28, height: 28,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle, border: Border.all(color: Colors.white, width: 2), boxShadow: [BoxShadow(color: color.withValues(alpha: .5), blurRadius: 6, spreadRadius: 1)]),
+          alignment: Alignment.center,
+          child: Text('$sno', style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
+        ),
+        CustomPaint(size: const Size(10, 6), painter: _TrianglePainter(color)),
+      ],
+    );
+  }
+}
+
+class _VehiclePin extends StatelessWidget {
+  const _VehiclePin({required this.icon, required this.color, required this.sno});
+  final IconData icon;
+  final Color color;
+  final int sno;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Container(
+          width: 36, height: 36,
+          decoration: BoxDecoration(color: const Color(0xFF0A0E1A), shape: BoxShape.circle, border: Border.all(color: color, width: 2.5), boxShadow: [BoxShadow(color: color.withValues(alpha: .4), blurRadius: 8)]),
+          child: Icon(icon, color: color, size: 18),
+        ),
+        Positioned(
+          top: -4, right: -4,
+          child: Container(
+            width: 16, height: 16,
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle, border: Border.all(color: const Color(0xFF0A0E1A), width: 1.5)),
+            alignment: Alignment.center,
+            child: Text('$sno', style: const TextStyle(color: Colors.white, fontSize: 8, fontWeight: FontWeight.bold)),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _TrianglePainter extends CustomPainter {
+  _TrianglePainter(this.color);
+  final Color color;
   @override
   void paint(Canvas canvas, Size size) {
-    final gridPaint = Paint()..color = border.withValues(alpha: .35)..strokeWidth = 1;
-    for (double x = 0; x < size.width; x += 34) {
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), gridPaint);
-    }
-    for (double y = 0; y < size.height; y += 34) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
-    }
-    for (final item in incidents) {
-      final inc = item.incident;
-      final loc = incidentLocation(inc);
-      final p = Offset(size.width * (.5 + (loc.$2 - 77.5946) * 3.5), size.height * (.5 - (loc.$1 - 12.9716) * 3.5));
-      final c = categoryColor(inc.responderCategory ?? classifyLocal(inc).$1);
-      canvas.drawCircle(p, 8, Paint()..color = c);
-      if (inc.status == 'assigned' && inc.resourceLat != null && inc.resourceLon != null) {
-        final r = Offset(size.width * (.5 + (inc.resourceLon! - 77.5946) * 3.5), size.height * (.5 - (inc.resourceLat! - 12.9716) * 3.5));
-        canvas.drawLine(r, p, Paint()..color = c..strokeWidth = 3);
-        canvas.drawCircle(r, 7, Paint()..color = bg);
-        canvas.drawCircle(r, 7, Paint()..color = c..style = PaintingStyle.stroke..strokeWidth = 3);
-      }
-    }
+    final paint = Paint()..color = color;
+    final path = Path()..moveTo(0, 0)..lineTo(size.width, 0)..lineTo(size.width / 2, size.height)..close();
+    canvas.drawPath(path, paint);
   }
-
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
+  bool shouldRepaint(covariant CustomPainter old) => false;
+}
+
+class _LegendRow extends StatelessWidget {
+  const _LegendRow({required this.icon, required this.color, required this.label});
+  final IconData icon;
+  final Color color;
+  final String label;
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: color, size: 14),
+          const SizedBox(width: 6),
+          Text(label, style: const TextStyle(color: Colors.white70, fontSize: 11)),
+        ],
+      ),
+    );
+  }
 }
 
 class RoutePanel extends StatelessWidget {
@@ -1446,8 +2228,7 @@ class StatusColumn extends StatelessWidget {
 
 class Header extends StatelessWidget {
   const Header({super.key, required this.title, required this.subtitle, this.action});
-  final String title;
-  final String subtitle;
+  final String title, subtitle;
   final Widget? action;
 
   @override
@@ -1455,26 +2236,70 @@ class Header extends StatelessWidget {
     return Row(
       children: [
         Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(title, style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: Colors.white)),
-            const SizedBox(height: 4),
-            Text(subtitle, style: TextStyle(color: Colors.grey.shade400)),
-          ]),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: Theme.of(context).textTheme.headlineLarge),
+              const SizedBox(height: 6),
+              Text(subtitle, style: TextStyle(color: AppStore().theme.text.withValues(alpha: .6), fontSize: 16)),
+            ],
+          ),
         ),
-        ?action,
+        if (action != null) action!,
       ],
     );
   }
 }
 
-class CommandCard extends StatelessWidget {
-  const CommandCard({super.key, required this.child, this.padding = const EdgeInsets.all(24)});
+class CommandCard extends StatefulWidget {
+  const CommandCard({super.key, required this.child, this.padding = const EdgeInsets.all(24), this.glow = false});
   final Widget child;
   final EdgeInsets padding;
+  final bool glow;
+
+  @override
+  State<CommandCard> createState() => _CommandCardState();
+}
+
+class _CommandCardState extends State<CommandCard> {
+  bool isHovered = false;
 
   @override
   Widget build(BuildContext context) {
-    return Container(padding: padding, decoration: panelBox(), child: child);
+    final store = AppStore();
+    return MouseRegion(
+      onEnter: (_) => setState(() => isHovered = true),
+      onExit: (_) => setState(() => isHovered = false),
+      child: AnimatedScale(
+        scale: isHovered ? 1.02 : 1.0,
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeOutCubic,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(18),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              padding: widget.padding,
+              decoration: store.isDarkMode 
+                  ? panelBox(glow: widget.glow || isHovered, alpha: isHovered ? 0.7 : 0.6)
+                  : BoxDecoration(
+                      color: AppTheme.light.card,
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(color: AppTheme.light.border),
+                      boxShadow: [
+                        const BoxShadow(color: Color(0x140F172A), offset: Offset(0, 1), blurRadius: 3),
+                        const BoxShadow(color: Color(0x120F172A), offset: Offset(0, 4), blurRadius: 6),
+                        if (widget.glow || isHovered)
+                          const BoxShadow(color: Color(0x1A0F172A), offset: Offset(0, 10), blurRadius: 24),
+                      ],
+                    ),
+              child: widget.child,
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -1488,13 +2313,24 @@ class AppTextField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final store = AppStore();
     return Padding(
       padding: const EdgeInsets.only(bottom: 14),
       child: TextField(
         controller: controller,
         obscureText: obscure,
         maxLines: obscure ? 1 : maxLines,
-        decoration: InputDecoration(labelText: label, hintText: hint, filled: true, fillColor: bg, border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: border)), focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: green))),
+        style: TextStyle(color: store.isDarkMode ? Colors.white : const Color(0xFF0F172A)),
+        decoration: InputDecoration(
+          labelText: label,
+          hintText: hint,
+          filled: true,
+          fillColor: store.isDarkMode ? const Color(0xFF0F172A).withValues(alpha: .5) : Colors.white.withValues(alpha: 0.9),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: store.isDarkMode ? emerald.withValues(alpha: 0.2) : const Color(0x4D94A3B8))),
+          enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: store.isDarkMode ? emerald.withValues(alpha: 0.2) : const Color(0x4D94A3B8))),
+          focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: store.isDarkMode ? emerald : const Color(0xFF0EA5E9), width: 1.5)),
+          labelStyle: TextStyle(color: store.isDarkMode ? Colors.grey : const Color(0xFF64748B)),
+        ),
       ),
     );
   }
@@ -1530,14 +2366,17 @@ class _GooglePlaceFieldState extends State<GooglePlaceField> {
           TextField(
             controller: widget.controller,
             onChanged: onChanged,
+            style: const TextStyle(color: Colors.white),
             decoration: InputDecoration(
               labelText: 'Location / Place',
               hintText: 'Start typing an exact Google Maps location',
               suffixIcon: loading ? const Padding(padding: EdgeInsets.all(12), child: SizedBox.square(dimension: 16, child: CircularProgressIndicator(strokeWidth: 2))) : const Icon(Icons.location_on_rounded),
               filled: true,
-              fillColor: bg,
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: border)),
-              focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: green)),
+              fillColor: const Color(0xFF0F172A).withValues(alpha: .5),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: emerald.withValues(alpha: 0.2))),
+              enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: emerald.withValues(alpha: 0.2))),
+              focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: emerald)),
+              labelStyle: const TextStyle(color: Colors.grey),
             ),
           ),
           if (suggestions.isNotEmpty)
@@ -1548,7 +2387,7 @@ class _GooglePlaceFieldState extends State<GooglePlaceField> {
               child: ListView.separated(
                 shrinkWrap: true,
                 itemCount: suggestions.length,
-                separatorBuilder: (context, index) => const Divider(color: border, height: 1),
+                separatorBuilder: (context, index) => Divider(color: Theme.of(context).dividerColor, height: 1),
                 itemBuilder: (context, index) {
                   final suggestion = suggestions[index];
                   return ListTile(
@@ -1653,17 +2492,345 @@ class EmptyState extends StatelessWidget {
 class Metric extends StatelessWidget {
   const Metric(this.label, this.value, this.icon, this.color, {super.key});
   final String label;
-  final int value;
+  final dynamic value;
   final IconData icon;
   final Color color;
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(width: 170, child: CommandCard(padding: const EdgeInsets.all(16), child: Row(children: [Icon(icon, color: color), const SizedBox(width: 12), Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('$value', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)), Text(label, style: const TextStyle(fontSize: 11, color: Colors.white54, letterSpacing: 1))])]))); 
+    return Container(
+      width: 190,
+      child: CommandCard(
+        padding: const EdgeInsets.all(20),
+        glow: color == emerald,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(icon, color: color, size: 20),
+                const Spacer(),
+                if (color == emerald) const PulseDot(color: emerald),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Text(value.toString(), style: const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold, letterSpacing: -1)),
+            Text(label, style: const TextStyle(color: Colors.grey, fontSize: 13, fontWeight: FontWeight.w500)),
+          ],
+        ),
+      ),
+    );
   }
 }
 
-BoxDecoration panelBox({double alpha = 1}) => BoxDecoration(color: card.withValues(alpha: alpha), border: Border.all(color: border), borderRadius: BorderRadius.circular(18), boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: .18), blurRadius: 18, offset: const Offset(0, 8))]);
+BoxDecoration panelBox({double alpha = 0.6, bool glow = false, AppTheme? theme}) {
+  final store = AppStore();
+  final active = theme ?? store.theme;
+  if (!store.isDarkMode) {
+    return BoxDecoration(
+      color: active.card.withValues(alpha: alpha),
+      border: Border.all(color: active.border),
+      borderRadius: BorderRadius.circular(18),
+      boxShadow: [
+        const BoxShadow(color: Color(0x140F172A), offset: Offset(0, 1), blurRadius: 3),
+        const BoxShadow(color: Color(0x120F172A), offset: Offset(0, 4), blurRadius: 6),
+        if (glow)
+          const BoxShadow(color: Color(0x1A0F172A), offset: Offset(0, 10), blurRadius: 24),
+      ],
+    );
+  }
+  return BoxDecoration(
+    color: active.card.withValues(alpha: alpha),
+    border: Border.all(color: active.border),
+    borderRadius: BorderRadius.circular(18),
+    boxShadow: [
+      if (glow)
+        BoxShadow(color: active.primary.withValues(alpha: 0.15), blurRadius: 30, spreadRadius: -5),
+      BoxShadow(color: Colors.black.withValues(alpha: 0.3), blurRadius: 20, offset: const Offset(0, 10)),
+    ],
+  );
+}
+
+class CyberpunkBackground extends StatelessWidget {
+  const CyberpunkBackground({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final store = AppStore();
+    final theme = store.theme;
+    return Stack(
+      children: [
+        AnimatedContainer(
+          duration: const Duration(milliseconds: 300),
+          decoration: BoxDecoration(
+            gradient: store.isDarkMode
+                ? LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [theme.bg2, theme.bg])
+                : RadialGradient(
+                    center: const Alignment(-0.8, -0.8),
+                    radius: 1.5,
+                    colors: [const Color(0xFF0EA5E9).withValues(alpha: 0.08), theme.bg],
+                  ),
+          ),
+        ),
+        if (!store.isDarkMode)
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: RadialGradient(
+                  center: const Alignment(0.8, 0.8),
+                  radius: 1.5,
+                  colors: [const Color(0xFF10B981).withValues(alpha: 0.06), Colors.transparent],
+                ),
+              ),
+            ),
+          ),
+        CustomPaint(
+          painter: GridOverlayPainter(theme.grid),
+          size: Size.infinite,
+        ),
+      ],
+    );
+  }
+}
+
+class GridOverlayPainter extends CustomPainter {
+  GridOverlayPainter(this.color);
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 1;
+
+    const spacing = 40.0;
+    for (double i = 0; i < size.width; i += spacing) {
+      canvas.drawLine(Offset(i, 0), Offset(i, size.height), paint);
+    }
+    for (double i = 0; i < size.height; i += spacing) {
+      canvas.drawLine(Offset(0, i), Offset(size.width, i), paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(CustomPainter oldDelegate) => false;
+}
+
+class PulseDot extends StatefulWidget {
+  const PulseDot({super.key, required this.color});
+  final Color color;
+
+  @override
+  State<PulseDot> createState() => _PulseDotState();
+}
+
+class _PulseDotState extends State<PulseDot> with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(vsync: this, duration: const Duration(seconds: 2))..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        return Container(
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: widget.color,
+            boxShadow: [
+              BoxShadow(
+                color: widget.color.withValues(alpha: 0.5 * _controller.value),
+                blurRadius: 8 * _controller.value,
+                spreadRadius: 4 * _controller.value,
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class CyberpunkGradientButton extends StatelessWidget {
+  const CyberpunkGradientButton({super.key, required this.onPressed, required this.label, this.icon, this.orange = false});
+  final VoidCallback? onPressed;
+  final String label;
+  final IconData? icon;
+  final bool orange;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = orange ? neonOrange : emerald;
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          if (onPressed != null)
+            BoxShadow(color: color.withValues(alpha: 0.3), blurRadius: 15, spreadRadius: -2, offset: const Offset(0, 4)),
+        ],
+      ),
+      child: ElevatedButton(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: Colors.transparent,
+          shadowColor: Colors.transparent,
+          padding: EdgeInsets.zero,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ).copyWith(
+          backgroundColor: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.disabled)) return Colors.grey.withValues(alpha: .2);
+            return null; // Uses the decoration gradient
+          }),
+        ),
+        onPressed: onPressed,
+        child: Ink(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: onPressed == null 
+                  ? [Colors.grey.withValues(alpha: .2), Colors.grey.withValues(alpha: .2)]
+                  : [color, color.withValues(alpha: 0.85)],
+            ),
+            borderRadius: BorderRadius.circular(12),
+            boxShadow: [
+              if (onPressed != null)
+                BoxShadow(color: color.withValues(alpha: 0.25), blurRadius: 12, offset: const Offset(0, 4)),
+            ],
+          ),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (icon != null) ...[Icon(icon, color: Theme.of(context).scaffoldBackgroundColor, size: 18), const SizedBox(width: 8)],
+                Text(label, style: TextStyle(color: Theme.of(context).scaffoldBackgroundColor, fontWeight: FontWeight.bold, letterSpacing: 0.5)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class AuthScreen extends StatefulWidget {
+  const AuthScreen({super.key, required this.store, required this.onChanged});
+  final AppStore store;
+  final VoidCallback onChanged;
+
+  @override
+  State<AuthScreen> createState() => _AuthScreenState();
+}
+
+class _AuthScreenState extends State<AuthScreen> {
+  bool isLogin = true;
+  final email = TextEditingController();
+  final password = TextEditingController();
+  final name = TextEditingController();
+  String role = 'user';
+  bool loading = false;
+  String? error;
+
+  void submit() async {
+    setState(() { loading = true; error = null; });
+    String? res;
+    if (isLogin) {
+      res = await widget.store.login(email.text, password.text);
+    } else {
+      res = await widget.store.signup(email: email.text, password: password.text, name: name.text, role: role);
+    }
+    if (!mounted) return;
+    if (res == null) {
+      widget.onChanged();
+    } else {
+      setState(() { error = res; loading = false; });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Stack(
+        children: [
+          const CyberpunkBackground(),
+          Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: CommandCard(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const Icon(Icons.shield_rounded, color: emerald, size: 48),
+                    const SizedBox(height: 16),
+                    Text(isLogin ? 'WELCOME BACK' : 'CREATE ACCOUNT', textAlign: TextAlign.center, style: Theme.of(context).textTheme.headlineMedium),
+                    const SizedBox(height: 8),
+                    Text(isLogin ? 'Nexus Dispatch Command Login' : 'Join the Nexus Network', textAlign: TextAlign.center, style: const TextStyle(color: Colors.grey)),
+                    const SizedBox(height: 32),
+                    if (!isLogin) AppTextField(label: 'Full Name', controller: name),
+                    AppTextField(label: 'Email Address', controller: email),
+                    AppTextField(label: 'Security Password', controller: password, obscure: true),
+                    if (!isLogin) ...[
+                      const Text('Access Role', style: TextStyle(color: Colors.grey, fontSize: 13)),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: RadioListTile<String>(
+                              title: const Text('User'),
+                              value: 'user',
+                              groupValue: role,
+                              onChanged: (v) => setState(() => role = v!),
+                              activeColor: emerald,
+                            ),
+                          ),
+                          Expanded(
+                            child: RadioListTile<String>(
+                              title: const Text('Admin'),
+                              value: 'admin',
+                              groupValue: role,
+                              onChanged: (v) => setState(() => role = v!),
+                              activeColor: emerald,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                    ],
+                    if (error != null) AlertBox(text: error!, color: Colors.redAccent),
+                    const SizedBox(height: 16),
+                    CyberpunkGradientButton(
+                      onPressed: loading ? null : submit,
+                      label: loading ? 'PROCESSING...' : (isLogin ? 'LOGIN' : 'SIGN UP'),
+                    ),
+                    const SizedBox(height: 24),
+                    TextButton(
+                      onPressed: () => setState(() => isLogin = !isLogin),
+                      child: Text(isLogin ? "Don't have an account? Sign Up" : "Already have an account? Login", style: const TextStyle(color: emerald)),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 final resources = <String, List<ResourceUnit>>{
   'ambulance': const [
@@ -1780,5 +2947,69 @@ Color statusColor(String status) => switch (status) { 'assigned' => blue, 'compl
 Color scoreColor(int? score) => score == null ? Colors.grey : score >= 80 ? Colors.redAccent : score >= 60 ? orange : yellow;
 Color categoryColor(String category) => switch (category) { 'fire' => orange, 'rescue' => violet, _ => cyan };
 
+
 int? asInt(dynamic value) => value == null ? null : int.tryParse('$value');
 double? asDouble(dynamic value) => value == null ? null : double.tryParse('$value');
+
+class ThemeToggle extends StatelessWidget {
+  const ThemeToggle({super.key, required this.store, required this.onChanged});
+  final AppStore store;
+  final VoidCallback onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = store.theme;
+    return GestureDetector(
+      onTap: () {
+        store.toggleTheme();
+        onChanged();
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 300),
+        width: 60,
+        height: 32,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(20),
+          color: theme.bg2.withValues(alpha: 0.2),
+          border: Border.all(color: theme.border),
+          boxShadow: [
+            BoxShadow(
+              color: store.isDarkMode ? emerald.withValues(alpha: 0.1) : orange.withValues(alpha: 0.08),
+              blurRadius: 8,
+              spreadRadius: 1,
+            ),
+          ],
+        ),
+        child: Stack(
+          children: [
+            AnimatedPositioned(
+              duration: const Duration(milliseconds: 300),
+              curve: Curves.easeInOut,
+              left: store.isDarkMode ? 32 : 2,
+              top: 2,
+              child: Container(
+                width: 26,
+                height: 26,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: store.isDarkMode ? emerald : orange,
+                  boxShadow: [
+                    if (store.isDarkMode)
+                      BoxShadow(color: emerald.withValues(alpha: 0.4), blurRadius: 10),
+                    if (!store.isDarkMode)
+                      BoxShadow(color: orange.withValues(alpha: 0.4), blurRadius: 10),
+                  ],
+                ),
+                child: Icon(
+                  store.isDarkMode ? Icons.nightlight_round : Icons.wb_sunny_rounded,
+                  size: 16,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

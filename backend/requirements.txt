@@ -1,7 +1,8 @@
-flask
-osmnx
-networkx
-shapely
+Flask
+flask-cors
 firebase-admin
 requests
+networkx
+osmnx
+shapely
 python-dotenv
