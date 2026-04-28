@@ -1,8 +1,27 @@
+# Node
 node_modules/
 dist/
+
+# Python
+__pycache__/
+*.pyc
+venv/
+env/
+
+# Environment
 .env
 .env.local
-.env.*.local
-*.log
+
+# Temp and OS
 .DS_Store
-.vite
+chrome_tmp/
+chrome_tmp2/
+*.log
+
+# Flutter
+build/
+.dart_tool/
+.pub-cache/
+.packages
+.flutter-plugins
+.flutter-plugins-dependencies

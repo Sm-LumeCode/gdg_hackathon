@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Emergency Dispatch - Bangalore</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Barlow+Condensed:wght@400;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+  <header class="hdr">
+    <div class="hdr-left">
+      <span class="live-badge">LIVE</span>
+      <span class="hdr-title">EMERGENCY DISPATCH CONTROL</span>
+      <span class="hdr-sub">BANGALORE METROPOLITAN AREA</span>
+    </div>
+    <div class="hdr-right">
+      <div class="stat-pill">Amb <span id="cnt-amb">-</span></div>
+      <div class="stat-pill">Fire <span id="cnt-fire">-</span></div>
+      <div class="clock" id="clock">00:00:00</div>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="panel">
+        <div class="panel-hdr">NEW EMERGENCY ZONE</div>
+        <div class="panel-body">
+          <p class="hint">Click the map to place a zone</p>
+          <div id="coords-display" class="coords">No location selected</div>
+          <label>ZONE NAME</label>
+          <input type="text" id="zone-name" placeholder="e.g. MG Road Fire">
+          <label>TYPE</label>
+          <div class="type-btns">
+            <button class="type-btn active" data-type="ambulance">AMBULANCE</button>
+            <button class="type-btn" data-type="fire">FIRE</button>
+          </div>
+          <label>SEVERITY: <strong id="sev-val">3</strong></label>
+          <input type="range" id="severity" min="1" max="5" value="3">
+          <div class="sev-labels"><span>LOW</span><span>CRITICAL</span></div>
+          <button class="btn-create" id="btn-create" disabled>CREATE ZONE</button>
+        </div>
+      </div>
+      <button class="btn-allocate-all" id="btn-allocate-all">ALLOCATE ALL PENDING</button>
+      <div class="panel">
+        <div class="panel-hdr">ACTIVE ZONES <span class="badge" id="zone-count">0</span></div>
+        <div class="panel-body" id="zones-list">
+          <div class="empty">No active zones. Click the map to begin.</div>
+        </div>
+      </div>
+    </aside>
+    <main class="map-wrap"><div id="map"></div></main>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
