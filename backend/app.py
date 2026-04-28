@@ -5,6 +5,9 @@ import os
 import re
 import urllib.parse
 import urllib.request
+import firebase_admin
+from firebase_admin import credentials, auth, firestore
+import requests
 
 try:
     import networkx as nx
@@ -38,6 +41,22 @@ def load_env_file():
 
 load_env_file()
 GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "")
+FIREBASE_API_KEY = os.environ.get("FIREBASE_API_KEY", "")
+
+# Initialize Firebase Admin
+cred_path = os.path.join(BASE_DIR, "serviceAccountKey.json")
+if os.path.exists(cred_path):
+    try:
+        cred = credentials.Certificate(cred_path)
+        firebase_admin.initialize_app(cred)
+        db = firestore.client()
+        print("Firebase Admin initialized successfully.")
+    except Exception as e:
+        print(f"Failed to initialize Firebase Admin: {e}")
+        db = None
+else:
+    print("Warning: serviceAccountKey.json not found. Firebase features will be disabled.")
+    db = None
 
 G = None
 resources_cache = None
@@ -217,6 +236,157 @@ def next_zone_id(zones):
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+@app.route("/api/auth/signup", methods=["POST", "OPTIONS"])
+def auth_signup():
+    if request.method == "OPTIONS": return "", 204
+    data = request.get_json() or {}
+    email = data.get("email")
+    password = data.get("password")
+    name = data.get("name")
+    role = data.get("role", "user")
+
+    if not all([email, password, name]):
+        return jsonify({"success": False, "message": "Missing fields"}), 400
+
+    if db is None:
+        return jsonify({"success": False, "message": "Firebase is not configured on the backend"}), 500
+
+    try:
+        # Create user in Firebase Auth
+        user_record = auth.create_user(
+            email=email,
+            password=password,
+            display_name=name
+        )
+        # Save additional user data in Firestore
+        user_data = {
+            "id": user_record.uid,
+            "email": email,
+            "name": name,
+            "role": role,
+            "incidents": []
+        }
+        db.collection("users").document(user_record.uid).set(user_data)
+        return jsonify({"success": True, "user": user_data}), 201
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 400
+
+
+@app.route("/api/auth/login", methods=["POST", "OPTIONS"])
+def auth_login():
+    if request.method == "OPTIONS": return "", 204
+    data = request.get_json() or {}
+    email = data.get("email")
+    password = data.get("password")
+
+    if not all([email, password]):
+        return jsonify({"success": False, "message": "Missing email or password"}), 400
+
+    if not FIREBASE_API_KEY:
+        return jsonify({"success": False, "message": "FIREBASE_API_KEY is not configured"}), 500
+    if db is None:
+        return jsonify({"success": False, "message": "Firebase Admin is not configured"}), 500
+
+    # Verify password using Firebase Identity Toolkit REST API
+    url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={FIREBASE_API_KEY}"
+    payload = {"email": email, "password": password, "returnSecureToken": True}
+    try:
+        res = requests.post(url, json=payload)
+        res_data = res.json()
+        if "error" in res_data:
+            err_msg = res_data["error"]["message"]
+            return jsonify({"success": False, "message": f"Login failed: {err_msg}"}), 401
+        
+        uid = res_data["localId"]
+        
+        # Get user data from Firestore
+        user_doc = db.collection("users").document(uid).get()
+        if user_doc.exists:
+            user_data = user_doc.to_dict()
+        else:
+            user_data = {"id": uid, "email": email, "name": "Unknown", "role": "user", "incidents": []}
+            
+        return jsonify({"success": True, "user": user_data, "token": res_data["idToken"]}), 200
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+@app.route("/api/incidents", methods=["GET", "OPTIONS"])
+def get_incidents():
+    if request.method == "OPTIONS": return "", 204
+    if db is None: return jsonify([]), 200
+    try:
+        users = db.collection("users").stream()
+        all_incidents = []
+        for u in users:
+            udata = u.to_dict()
+            for inc in udata.get("incidents", []):
+                inc["userId"] = udata.get("id")
+                inc["userName"] = udata.get("name")
+                all_incidents.append(inc)
+        all_incidents.sort(key=lambda x: x.get("date", ""), reverse=True)
+        return jsonify(all_incidents), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/incidents", methods=["POST", "OPTIONS"])
+def create_incident():
+    if request.method == "OPTIONS": return "", 204
+    if db is None: return jsonify({"error": "No DB"}), 500
+    data = request.get_json() or {}
+    user_id = data.get("userId")
+    incident = data.get("incident")
+    if not user_id or not incident:
+        return jsonify({"error": "Missing data"}), 400
+    
+    try:
+        user_ref = db.collection("users").document(user_id)
+        user_doc = user_ref.get()
+        if not user_doc.exists:
+            return jsonify({"error": "User not found"}), 404
+        
+        udata = user_doc.to_dict()
+        incidents = udata.get("incidents", [])
+        incidents.append(incident)
+        user_ref.update({"incidents": incidents})
+        
+        udata["incidents"] = incidents
+        return jsonify({"success": True, "user": udata}), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/incidents/<incident_id>", methods=["PUT", "OPTIONS"])
+def update_incident(incident_id):
+    if request.method == "OPTIONS": return "", 204
+    if db is None: return jsonify({"error": "No DB"}), 500
+    data = request.get_json() or {}
+    user_id = data.get("userId")
+    updates = data.get("updates", {})
+    if not user_id:
+        return jsonify({"error": "Missing userId"}), 400
+        
+    try:
+        user_ref = db.collection("users").document(user_id)
+        user_doc = user_ref.get()
+        if not user_doc.exists:
+            return jsonify({"error": "User not found"}), 404
+            
+        udata = user_doc.to_dict()
+        incidents = udata.get("incidents", [])
+        for idx, inc in enumerate(incidents):
+            if inc.get("id") == incident_id:
+                incidents[idx].update(updates)
+                break
+                
+        user_ref.update({"incidents": incidents})
+        udata["incidents"] = incidents
+        return jsonify({"success": True, "user": udata}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/health", methods=["GET"])

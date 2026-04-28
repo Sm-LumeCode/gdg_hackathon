@@ -560,13 +560,53 @@ class UserDashboard extends StatefulWidget {
 
 class _UserDashboardState extends State<UserDashboard> {
   int step = 1;
+  
+  // MCQ Selections
+  String? selectedAccidentType;
+  String? groupOrIndividual;
+  String? selectedGroupSize;
+  final customGroupSize = TextEditingController();
+  
+  // Existing fields
   final description = TextEditingController();
-  final incidentType = TextEditingController();
   final place = TextEditingController();
   String? imageBase64;
   String? imageName;
   double? selectedLat;
   double? selectedLon;
+
+  final List<String> accidentTypes = [
+    'Fire related accident (Fire extinguishers required)',
+    'Medical emergency (Ambulance required)',
+    'Rescue operation (Rescue team required)',
+    'Other Emergency',
+  ];
+
+  final List<String> groupSizes = ['< 10', '< 50', '< 100', '< 200', 'Other'];
+
+  void next() {
+    if (step == 1 && selectedAccidentType == null) return;
+    if (step == 2 && groupOrIndividual == null) return;
+    if (step == 2 && groupOrIndividual == 'Individual') {
+      setState(() => step = 4); // Skip group size step
+      return;
+    }
+    if (step == 3) {
+      if (selectedGroupSize == null) return;
+      if (selectedGroupSize == 'Other' && customGroupSize.text.trim().isEmpty) return;
+    }
+    if (step == 4 && place.text.trim().isEmpty) return;
+    
+    setState(() => step++);
+  }
+
+  void back() {
+    if (step == 4 && groupOrIndividual == 'Individual') {
+      setState(() => step = 2);
+    } else {
+      setState(() => step--);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -578,109 +618,40 @@ class _UserDashboardState extends State<UserDashboard> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Icon(step == 1 ? Icons.send_rounded : Icons.fact_check_rounded, color: green, size: 44),
+              Icon(getStepIcon(), color: green, size: 44),
               const SizedBox(height: 16),
-              Text(step == 1 ? 'Report an Incident' : 'Please provide more details', textAlign: TextAlign.center, style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold)),
+              Text(getStepTitle(), textAlign: TextAlign.center, style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold)),
               const SizedBox(height: 8),
-              Text(step == 1 ? 'Describe the incident you are witnessing.' : 'These fields feed the allotment engine automatically.', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey.shade400)),
+              Text(getStepSubtitle(), textAlign: TextAlign.center, style: TextStyle(color: Colors.grey.shade400)),
               const SizedBox(height: 24),
-              if (step == 1)
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    AppTextField(label: 'Incident Description', controller: description, maxLines: 5),
-                    if (imageBase64 != null)
-                      Container(
-                        margin: const EdgeInsets.only(bottom: 12),
-                        padding: const EdgeInsets.all(10),
-                        decoration: panelBox(),
-                        child: Row(
-                          children: [
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(8),
-                              child: Image.memory(base64Decode(imageBase64!), width: 64, height: 64, fit: BoxFit.cover),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(child: Text(imageName ?? 'Attached image', overflow: TextOverflow.ellipsis)),
-                            IconButton(
-                              onPressed: () => setState(() {
-                                imageBase64 = null;
-                                imageName = null;
-                              }),
-                              icon: const Icon(Icons.close_rounded),
-                            ),
-                          ],
-                        ),
-                      ),
-                    OutlinedButton.icon(
-                      onPressed: pickImage,
-                      icon: const Icon(Icons.add_photo_alternate_rounded),
-                      label: const Text('Attach Photo'),
-                    ),
-                  ],
-                )
-              else ...[
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: panelBox(),
+              
+              // Step Content
+              Expanded(
+                child: SingleChildScrollView(
                   child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Text(description.text, style: const TextStyle(color: Colors.white70)),
-                      if (imageBase64 != null) ...[
-                        const SizedBox(height: 12),
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(10),
-                          child: Image.memory(base64Decode(imageBase64!), height: 130, fit: BoxFit.cover),
-                        ),
-                      ],
+                      if (step == 1) ...buildStep1(),
+                      if (step == 2) ...buildStep2(),
+                      if (step == 3) ...buildStep3(),
+                      if (step == 4) ...buildStep4(),
+                      if (step == 5) ...buildStep5(),
                     ],
                   ),
                 ),
-                AppTextField(label: 'Incident Type', controller: incidentType, hint: 'e.g. Fire, Medical Emergency, Accident'),
-                GooglePlaceField(
-                  controller: place,
-                  onSelected: (suggestion) => setState(() {
-                    place.text = suggestion.description;
-                    selectedLat = suggestion.lat;
-                    selectedLon = suggestion.lon;
-                  }),
-                ),
-              ],
+              ),
+              
               const SizedBox(height: 18),
               Row(
                 children: [
-                  if (step == 2)
-                    Expanded(child: OutlinedButton(onPressed: () => setState(() => step = 1), child: const Text('Back'))),
-                  if (step == 2) const SizedBox(width: 12),
+                  if (step > 1)
+                    Expanded(child: OutlinedButton(onPressed: back, child: const Text('Back'))),
+                  if (step > 1) const SizedBox(width: 12),
                   Expanded(
                     child: FilledButton(
                       style: FilledButton.styleFrom(backgroundColor: green, foregroundColor: bg, padding: const EdgeInsets.all(16)),
-                      onPressed: () {
-                        if (step == 1) {
-                          if (description.text.trim().isNotEmpty) setState(() => step = 2);
-                        } else if (incidentType.text.trim().isNotEmpty && place.text.trim().isNotEmpty) {
-                          widget.store.addIncident(
-                            description: description.text.trim(),
-                            incidentType: incidentType.text.trim(),
-                            place: place.text.trim(),
-                            lat: selectedLat,
-                            lon: selectedLon,
-                            image: imageBase64,
-                          );
-                          description.clear();
-                          incidentType.clear();
-                          place.clear();
-                          imageBase64 = null;
-                          imageName = null;
-                          selectedLat = null;
-                          selectedLon = null;
-                          setState(() => step = 1);
-                          widget.onChanged();
-                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Incident reported successfully'), backgroundColor: green));
-                        }
-                      },
-                      child: Text(step == 1 ? 'Continue' : 'Confirm & Report', style: const TextStyle(fontWeight: FontWeight.bold)),
+                      onPressed: step == 5 ? submit : next,
+                      child: Text(step == 5 ? 'Confirm & Report' : 'Next', style: const TextStyle(fontWeight: FontWeight.bold)),
                     ),
                   ),
                 ],
@@ -692,6 +663,132 @@ class _UserDashboardState extends State<UserDashboard> {
     );
   }
 
+  IconData getStepIcon() {
+    return switch (step) {
+      1 => Icons.warning_amber_rounded,
+      2 => Icons.people_outline_rounded,
+      3 => Icons.groups_rounded,
+      4 => Icons.location_on_rounded,
+      _ => Icons.description_rounded,
+    };
+  }
+
+  String getStepTitle() {
+    return switch (step) {
+      1 => 'Accident Type',
+      2 => 'Scale of Incident',
+      3 => 'Group Size',
+      4 => 'Location',
+      _ => 'Final Details (Optional)',
+    };
+  }
+
+  String getStepSubtitle() {
+    return switch (step) {
+      1 => 'What type of emergency are you reporting?',
+      2 => 'Is this affecting an individual or a group?',
+      3 => 'Estimate how many people are involved.',
+      4 => 'Where did this happen?',
+      _ => 'Add any additional context or photos.',
+    };
+  }
+
+  List<Widget> buildStep1() {
+    return accidentTypes.map((type) => Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: RadioListTile<String>(
+        title: Text(type),
+        value: type,
+        groupValue: selectedAccidentType,
+        onChanged: (val) => setState(() => selectedAccidentType = val),
+        tileColor: bg,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10), side: BorderSide(color: selectedAccidentType == type ? green : border)),
+        activeColor: green,
+      ),
+    )).toList();
+  }
+
+  List<Widget> buildStep2() {
+    return ['Individual', 'Group'].map((type) => Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: RadioListTile<String>(
+        title: Text(type),
+        value: type,
+        groupValue: groupOrIndividual,
+        onChanged: (val) => setState(() => groupOrIndividual = val),
+        tileColor: bg,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10), side: BorderSide(color: groupOrIndividual == type ? green : border)),
+        activeColor: green,
+      ),
+    )).toList();
+  }
+
+  List<Widget> buildStep3() {
+    return [
+      ...groupSizes.map((size) => Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: RadioListTile<String>(
+          title: Text(size),
+          value: size,
+          groupValue: selectedGroupSize,
+          onChanged: (val) => setState(() => selectedGroupSize = val),
+          tileColor: bg,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10), side: BorderSide(color: selectedGroupSize == size ? green : border)),
+          activeColor: green,
+        ),
+      )),
+      if (selectedGroupSize == 'Other')
+        AppTextField(label: 'Enter number of people', controller: customGroupSize, hint: 'e.g. 150'),
+    ];
+  }
+
+  List<Widget> buildStep4() {
+    return [
+      GooglePlaceField(
+        controller: place,
+        onSelected: (suggestion) => setState(() {
+          place.text = suggestion.description;
+          selectedLat = suggestion.lat;
+          selectedLon = suggestion.lon;
+        }),
+      ),
+    ];
+  }
+
+  List<Widget> buildStep5() {
+    return [
+      AppTextField(label: 'Additional Description', controller: description, maxLines: 4, hint: 'Tell us more about the situation...'),
+      if (imageBase64 != null)
+        Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.all(10),
+          decoration: panelBox(),
+          child: Row(
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Image.memory(base64Decode(imageBase64!), width: 64, height: 64, fit: BoxFit.cover),
+              ),
+              const SizedBox(width: 12),
+              Expanded(child: Text(imageName ?? 'Attached image', overflow: TextOverflow.ellipsis)),
+              IconButton(
+                onPressed: () => setState(() {
+                  imageBase64 = null;
+                  imageName = null;
+                }),
+                icon: const Icon(Icons.close_rounded),
+              ),
+            ],
+          ),
+        ),
+      OutlinedButton.icon(
+        onPressed: pickImage,
+        icon: const Icon(Icons.add_photo_alternate_rounded),
+        label: const Text('Attach Photo'),
+      ),
+    ];
+  }
+
   Future<void> pickImage() async {
     final result = await FilePicker.platform.pickFiles(type: FileType.image, withData: true);
     final file = result?.files.single;
@@ -700,6 +797,43 @@ class _UserDashboardState extends State<UserDashboard> {
       imageBase64 = base64Encode(file!.bytes!);
       imageName = file.name;
     });
+  }
+
+  void submit() {
+    if (selectedAccidentType == null || place.text.trim().isEmpty) return;
+
+    final finalGroupInfo = groupOrIndividual == 'Group' 
+        ? 'Group Size: ${selectedGroupSize == 'Other' ? customGroupSize.text : selectedGroupSize}'
+        : 'Individual';
+    
+    final finalDescription = 'Scale: $finalGroupInfo. ${description.text.trim()}';
+
+    widget.store.addIncident(
+      description: finalDescription,
+      incidentType: selectedAccidentType!,
+      place: place.text.trim(),
+      lat: selectedLat,
+      lon: selectedLon,
+      image: imageBase64,
+    );
+
+    // Reset state
+    setState(() {
+      step = 1;
+      selectedAccidentType = null;
+      groupOrIndividual = null;
+      selectedGroupSize = null;
+      customGroupSize.clear();
+      description.clear();
+      place.clear();
+      imageBase64 = null;
+      imageName = null;
+      selectedLat = null;
+      selectedLon = null;
+    });
+
+    widget.onChanged();
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Incident reported successfully'), backgroundColor: green));
   }
 }
 
