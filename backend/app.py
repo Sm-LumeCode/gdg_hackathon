@@ -8,6 +8,9 @@ import urllib.request
 import firebase_admin
 from firebase_admin import credentials, auth, firestore
 import requests
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 try:
     import networkx as nx
@@ -247,6 +250,100 @@ def save_users_local(users):
         json.dump(users, f, indent=2)
 
 
+def calculate_incident_score(incident):
+    description = incident.get('description', '').lower()
+    incident_type = incident.get('incidentType', '').lower()
+    
+    # Base score
+    score = 40
+    
+    # 1. Parse Scale
+    if "scale: group" in description:
+        score += 20
+        # Try to find specific size
+        if "< 50" in description: score += 5
+        elif "< 100" in description: score += 10
+        elif "< 200" in description: score += 15
+        elif "other" in description or "100+" in description: score += 20
+    elif "scale: individual" in description:
+        score += 5
+
+    # 2. Keywords analysis
+    high_priority = r"fire|explosion|collapse|trapped|critical|blood|unconscious|breath|heart|severe|death|dying"
+    medium_priority = r"accident|injury|broken|leak|flood|smoke|fight|theft"
+    
+    if re.search(high_priority, description) or re.search(high_priority, incident_type):
+        score += 35
+    elif re.search(medium_priority, description) or re.search(medium_priority, incident_type):
+        score += 15
+
+    # 3. Crowd/Location context
+    if re.search(r"many|crowd|school|building|hospital|mall|public|busy|road", description):
+        score += 10
+
+    # Ensure max 100
+    final_score = min(100, score)
+    
+    # 4. Optional Gemini Refinement (if key available)
+    gemini_key = os.environ.get("GEMINI_API_KEY")
+    if gemini_key:
+        try:
+            prompt = f"Analyze this emergency report and provide a criticality score from 0-100. Type: {incident_type}. Report: {description}. Return ONLY the integer score."
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={gemini_key}"
+            payload = {"contents": [{"parts": [{"text": prompt}]}]}
+            res = requests.post(url, json=payload, timeout=5)
+            if res.status_code == 200:
+                text = res.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+                ai_score = int(re.search(r"\d+", text).group())
+                # Blend AI score with rule-based score (70% AI weight)
+                final_score = int(final_score * 0.3 + ai_score * 0.7)
+        except Exception as e:
+            print(f"Gemini scoring failed, using rule-based score: {e}")
+
+    return min(100, final_score)
+
+
+def send_admin_email_alert(incident, score):
+    admin_email = os.environ.get("ADMIN_EMAIL")
+    smtp_user = os.environ.get("SMTP_USER")
+    smtp_pass = os.environ.get("SMTP_PASSWORD")
+    smtp_server = os.environ.get("SMTP_SERVER", "smtp.gmail.com")
+    smtp_port = int(os.environ.get("SMTP_PORT", 587))
+
+    if not all([admin_email, smtp_user, smtp_pass]):
+        print("SMTP credentials or Admin email not configured. Alert logged to console only.")
+        print(f"CRITICAL ALERT: Score {score} for incident {incident.get('incidentType')}")
+        return
+
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = smtp_user
+        msg['To'] = admin_email
+        msg['Subject'] = f"CRITICAL EMERGENCY ALERT - Score: {score}"
+        
+        body = f"""
+        URGENT: A high-severity incident has been reported.
+        
+        Severity Score: {score}
+        Incident Type: {incident.get('incidentType')}
+        Location: {incident.get('place')}
+        Description: {incident.get('description')}
+        Reported At: {incident.get('date')}
+        
+        Please deploy resources immediately via the Nexus Command Center.
+        """
+        msg.attach(MIMEText(body, 'plain'))
+
+        server = smtplib.SMTP(smtp_server, smtp_port)
+        server.starttls()
+        server.login(smtp_user, smtp_pass)
+        server.send_message(msg)
+        server.quit()
+        print(f"Critical alert email sent to {admin_email}")
+    except Exception as e:
+        print(f"Error sending email alert: {e}")
+
+
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -402,6 +499,13 @@ def create_incident():
             return jsonify({"error": "User not found"}), 404
         
         incidents = user_to_update.get("incidents", [])
+        
+        # Calculate score and check for alerts
+        score = calculate_incident_score(incident)
+        incident["score"] = score
+        if score > 90:
+            send_admin_email_alert(incident, score)
+            
         incidents.append(incident)
         user_to_update["incidents"] = incidents
         save_users_local(users)
@@ -415,6 +519,13 @@ def create_incident():
         
         udata = user_doc.to_dict()
         incidents = udata.get("incidents", [])
+        
+        # Calculate score and check for alerts
+        score = calculate_incident_score(incident)
+        incident["score"] = score
+        if score > 90:
+            send_admin_email_alert(incident, score)
+            
         incidents.append(incident)
         user_ref.update({"incidents": incidents})
         
