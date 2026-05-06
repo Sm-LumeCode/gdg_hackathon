@@ -4,5 +4,4 @@ firebase-admin
 requests
 networkx
 osmnx
-shapely
 python-dotenv

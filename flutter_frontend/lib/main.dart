@@ -535,24 +535,21 @@ class AppStore {
     return all;
   }
 
-  Future<void> updateIncident(Incident incident) async {
-    final user = currentUser;
-    if (user == null) return;
-    
+  Future<void> updateIncident(Incident incident, String ownerId) async {
     try {
       final response = await http.put(
         Uri.parse('$backendBaseUrl/api/incidents/${incident.id}'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
-          'userId': user.id,
+          'userId': ownerId,
           'updates': incident.toJson(),
         }),
       );
       final data = jsonDecode(response.body);
       if (data['success'] == true) {
         final updatedUser = UserAccount.fromJson(Map<String, dynamic>.from(data['user']));
-        currentUser = updatedUser;
-        final idx = users.indexWhere((u) => u.id == user.id);
+        if (currentUser?.id == updatedUser.id) currentUser = updatedUser;
+        final idx = users.indexWhere((u) => u.id == updatedUser.id);
         if (idx != -1) users[idx] = updatedUser;
       }
     } catch (e) {}
@@ -655,7 +652,7 @@ class _ShellState extends State<Shell> {
         : [
             (icon: Icons.report_problem_rounded, label: 'Report Incident'),
             (icon: Icons.map_rounded, label: 'Response Status'),
-            (icon: Icons.history_rounded, label: 'My Reports'),
+            (icon: Icons.gps_fixed_rounded, label: 'Live Tracking'),
           ];
 
     final selected = isVolunteer ? adminTab : userTab;
@@ -811,7 +808,7 @@ class _ShellState extends State<Shell> {
   Widget userPage(int index) {
     return switch (index) {
       0 => UserDashboard(store: widget.store, onChanged: widget.onChanged),
-      1 => UserAllocation(store: widget.store),
+      1 => UserAllocation(store: widget.store, onTrack: () => setState(() => userTab = 2)),
       _ => UserRouting(store: widget.store, onChanged: widget.onChanged),
     };
   }
@@ -1269,8 +1266,8 @@ class _VolunteerAllotmentState extends State<VolunteerAllotment> {
       inc.distanceKm = assignment.distanceKm; inc.etaMinutes = assignment.etaMinutes;
       inc.etaSeconds = assignment.etaMinutes * 60; inc.assignedAt = DateTime.now().millisecondsSinceEpoch;
       taken.add(assignment.resource.id);
+      await widget.store.updateIncident(inc, item.user.id);
     }
-    await widget.store.persist();
     await Future<void>.delayed(const Duration(milliseconds: 500));
     setState(() => running = false);
     widget.onChanged();
@@ -1357,7 +1354,12 @@ class AdminRecord extends StatelessWidget {
             children: [
               Expanded(child: RecordColumn(title: 'Pending', icon: Icons.schedule_rounded, color: orange, items: pending)),
               const SizedBox(width: 18),
-              Expanded(child: RecordColumn(title: 'Assigned', icon: Icons.local_shipping_rounded, color: blue, items: assigned, action: (item) { item.incident.status = 'completed'; item.incident.completedAt = DateTime.now().toIso8601String(); store.persist(); onChanged(); })),
+              Expanded(child: RecordColumn(title: 'Assigned', icon: Icons.local_shipping_rounded, color: blue, items: assigned, action: (item) { 
+                item.incident.status = 'completed'; 
+                item.incident.completedAt = DateTime.now().toIso8601String(); 
+                store.updateIncident(item.incident, item.user.id); 
+                onChanged(); 
+              })),
             ],
           ),
         ),
@@ -1367,8 +1369,9 @@ class AdminRecord extends StatelessWidget {
 }
 
 class UserAllocation extends StatelessWidget {
-  const UserAllocation({super.key, required this.store});
+  const UserAllocation({super.key, required this.store, this.onTrack});
   final AppStore store;
+  final VoidCallback? onTrack;
 
   @override
   Widget build(BuildContext context) {
@@ -1383,7 +1386,7 @@ class UserAllocation extends StatelessWidget {
             children: [
               Expanded(child: StatusColumn(title: 'Pending', icon: Icons.schedule_rounded, color: orange, incidents: incidents.where((item) => item.status == 'pending').toList())),
               const SizedBox(width: 16),
-              Expanded(child: StatusColumn(title: 'Assigned', icon: Icons.local_shipping_rounded, color: blue, incidents: incidents.where((item) => item.status == 'assigned').toList())),
+              Expanded(child: StatusColumn(title: 'Assigned', icon: Icons.local_shipping_rounded, color: blue, incidents: incidents.where((item) => item.status == 'assigned').toList(), onTrack: onTrack)),
               const SizedBox(width: 16),
               Expanded(child: StatusColumn(title: 'Completed', icon: Icons.check_circle_rounded, color: green, incidents: incidents.where((item) => item.status == 'completed').toList())),
             ],
@@ -1423,15 +1426,79 @@ class _UserRoutingState extends State<UserRouting> {
     final active = incidents.firstOrNull;
     if (active == null) return const EmptyState(icon: Icons.map_rounded, text: 'No active incidents to track.');
     if (active.status != 'assigned') return AnalyzingPanel(incident: active);
+    
     final remaining = remainingSeconds(active, now);
     final progress = ((max(1, active.etaSeconds ?? 1) - remaining) / max(1, active.etaSeconds ?? 1)).clamp(0.0, 1.0);
+    
     return Column(
       children: [
-        CommandCard(child: Row(children: [const Icon(Icons.timer_rounded, color: green), const SizedBox(width: 12), Text('${remaining ~/ 60} min ${remaining % 60} sec', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)), Text(' left', style: TextStyle(color: Colors.grey.shade400))])),
+        CommandCard(
+          child: Column(
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(color: emerald.withValues(alpha: .2), borderRadius: BorderRadius.circular(4)),
+                        child: Row(
+                          children: [
+                            Container(width: 6, height: 6, decoration: const BoxDecoration(color: emerald, shape: BoxShape.circle)),
+                            const SizedBox(width: 6),
+                            const Text('LIVE TRACKING', style: TextStyle(color: emerald, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1)),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  Text('${active.distanceKm?.toStringAsFixed(1)} km away', style: const TextStyle(color: Colors.white38, fontSize: 12)),
+                ],
+              ),
+              const SizedBox(height: 20),
+              Row(
+                children: [
+                  const Icon(Icons.timer_rounded, color: emerald, size: 28),
+                  const SizedBox(width: 12),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('${remaining ~/ 60} min ${remaining % 60} sec', style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.white)),
+                      const Text('ESTIMATED TIME OF ARRIVAL', style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1)),
+                    ],
+                  ),
+                ],
+              ),
+              const SizedBox(height: 20),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: LinearProgressIndicator(
+                  value: progress,
+                  backgroundColor: border,
+                  color: emerald,
+                  minHeight: 8,
+                ),
+              ),
+            ],
+          ),
+        ),
         const SizedBox(height: 18),
         Expanded(child: RoutePanel(incident: active, progress: progress)),
         const SizedBox(height: 18),
-        CommandCard(child: ListTile(leading: const CircleAvatar(backgroundColor: green, child: Icon(Icons.local_shipping_rounded, color: bg)), title: const Text('Responder Dispatched'), subtitle: Text('${active.responderName ?? active.responderType} | ${active.distanceKm?.toStringAsFixed(2)} km | ETA ${active.etaMinutes} min'))),
+        CommandCard(
+          child: ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const CircleAvatar(radius: 24, backgroundColor: emerald, child: Icon(Icons.local_shipping_rounded, color: bg, size: 24)),
+            title: Text(active.responderName ?? 'Dispatch Unit 1', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+            subtitle: Text('Your ${active.responderType} responder is on the way', style: const TextStyle(color: Colors.white38, fontSize: 12)),
+            trailing: IconButton(
+              onPressed: () {},
+              icon: const Icon(Icons.phone_in_talk_rounded, color: emerald),
+              style: IconButton.styleFrom(backgroundColor: emerald.withValues(alpha: .1)),
+            ),
+          ),
+        ),
       ],
     );
   }
@@ -1597,8 +1664,9 @@ class RecordColumn extends StatelessWidget {
 }
 
 class StatusColumn extends StatelessWidget {
-  const StatusColumn({super.key, required this.title, required this.icon, required this.color, required this.incidents});
+  const StatusColumn({super.key, required this.title, required this.icon, required this.color, required this.incidents, this.onTrack});
   final String title; final IconData icon; final Color color; final List<Incident> incidents;
+  final VoidCallback? onTrack;
   @override
   Widget build(BuildContext context) {
     return CommandCard(
@@ -1618,10 +1686,27 @@ class StatusColumn extends StatelessWidget {
                       return Container(
                         margin: const EdgeInsets.only(bottom: 12),
                         decoration: BoxDecoration(color: bg.withValues(alpha: .3), borderRadius: BorderRadius.circular(12), border: Border.all(color: border)),
-                        child: ListTile(
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                          title: Text(inc.incidentType, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
-                          subtitle: Text(inc.place, style: const TextStyle(color: Colors.white38, fontSize: 10), maxLines: 1),
+                        child: Column(
+                          children: [
+                            ListTile(
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                              title: Text(inc.incidentType, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                              subtitle: Text(inc.place, style: const TextStyle(color: Colors.white38, fontSize: 10), maxLines: 1),
+                            ),
+                            if (inc.status == 'assigned' && onTrack != null)
+                              Padding(
+                                padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                                child: SizedBox(
+                                  width: double.infinity,
+                                  child: OutlinedButton.icon(
+                                    onPressed: onTrack,
+                                    icon: const Icon(Icons.gps_fixed_rounded, size: 14),
+                                    label: const Text('TRACK RESPONDER', style: TextStyle(fontSize: 10, letterSpacing: 1)),
+                                    style: OutlinedButton.styleFrom(foregroundColor: emerald, side: const BorderSide(color: emeraldBorder)),
+                                  ),
+                                ),
+                              ),
+                          ],
                         ),
                       );
                     },
